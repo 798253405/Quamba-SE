@@ -111,7 +111,7 @@ def configure_model(model, model_type, use_had_transform=True):
 @torch.no_grad()
 def run_quamba_calibration(
         model, model_type, tokenizer, num_samples=512, seq_len=512,
-        calibration_dataset=None, preprocess_fn=None
+        calibration_dataset=None, preprocess_fn=None, percentile_alpha=None
     ):
 
     if model_type == "mamba":
@@ -121,7 +121,8 @@ def run_quamba_calibration(
         is_calib_ops = lambda op: isinstance(op, (torch.nn.Linear, ActIdentity))
         is_x = lambda op: op == "x_proj"
         is_ssm_state = lambda op: op == "ssm_state_act"
-        percentile_alpha=0.9995 # for smaller model like 130m, use 0.99999
+        if percentile_alpha is None:
+            percentile_alpha=0.9995 # for smaller model like 130m, use 0.99999
     elif model_type == "mamba2":
         layers = model.backbone.layers
         is_traget_block = lambda block: isinstance(block, Block)
@@ -129,7 +130,8 @@ def run_quamba_calibration(
         is_calib_ops = lambda op: isinstance(op, (torch.nn.Linear, ActIdentity))
         is_x = lambda op: op == "x_conv_out"
         is_ssm_state = lambda op: op == "ssm_state_act"
-        percentile_alpha=0.9995  # for smaller model like 130m, use 0.99999
+        if percentile_alpha is None:
+            percentile_alpha=0.9995  # for smaller model like 130m, use 0.99999
     else:
         raise ValueError(f"Unsupported model type: {model_type}, only support 'mamba' and 'mamba2'")
 
@@ -220,9 +222,28 @@ def run_quamba_calibration(
     
     for h in hooks:
         h.remove()
-    
+
     # collect in/output scaling factors for layers, num_layer + lm_head
     act_scales = [{} for _ in range(len(layers) + 1)]
+
+    # 收集percentile统计信息
+    try:
+        from .percentile_logger import get_percentile_logger
+        plogger = get_percentile_logger()
+
+        for i in range(min(3, len(layers))):  # 只记录前3层
+            for name, observer in observers[i].items():
+                if hasattr(observer, 'get_stats'):
+                    # 如果logger需要保存激活值，则包含激活值
+                    stats = observer.get_stats(include_activations=plogger.save_activations)
+                    layer_name = f"layer_{i}.{name}"
+
+                    # 提取激活值（如果有）
+                    activation_values = stats.pop("raw_activations", None)
+                    plogger.log_activation_stats(layer_name, stats, activation_values=activation_values)
+    except Exception as e:
+        logging.warning(f"Failed to log percentile stats: {e}")
+
     for i in range(len(layers) + 1):
         for name, observer in observers[i].items():
             scale, base = observer.get_quantization_parameters()
@@ -234,7 +255,7 @@ def run_quamba_calibration(
 @torch.no_grad()
 def run_quamba2_calibration(
         model, model_type, tokenizer, reorder_params,
-        num_samples=512, seq_len=512, calibration_dataset=None, preprocess_fn=None
+        num_samples=512, seq_len=512, calibration_dataset=None, preprocess_fn=None, percentile_alpha=None
     ):
 
     if model_type == "mamba":
@@ -247,7 +268,8 @@ def run_quamba2_calibration(
         is_BC = lambda op: op == "B_conv_out" or op == "C_conv_out"
         is_ssm_state = lambda op: op == "ssm_state_act"
         is_calib_ops = lambda op: isinstance(op, (torch.nn.Linear, ActIdentity))
-        percentile_alpha=0.99999
+        if percentile_alpha is None:
+            percentile_alpha=0.99999
     else:
         raise ValueError(f"Unsupported model type: {model_type}, only support 'mamba2'")
 
@@ -360,9 +382,28 @@ def run_quamba2_calibration(
     
     for h in hooks:
         h.remove()
-    
+
     # collect in/output scaling factors for layers, num_layer + lm_head
     act_scales = [{} for _ in range(len(layers) + 1)]
+
+    # 收集percentile统计信息（Quamba2）
+    try:
+        from .percentile_logger import get_percentile_logger
+        plogger = get_percentile_logger()
+
+        for i in range(min(3, len(layers))):  # 只记录前3层
+            for name, observer in observers[i].items():
+                if hasattr(observer, 'get_stats'):
+                    # 如果logger需要保存激活值，则包含激活值
+                    stats = observer.get_stats(include_activations=plogger.save_activations)
+                    layer_name = f"layer_{i}.{name}_reordered"
+
+                    # 提取激活值（如果有）
+                    activation_values = stats.pop("raw_activations", None)
+                    plogger.log_activation_stats(layer_name, stats, activation_values=activation_values)
+    except Exception as e:
+        logging.warning(f"Failed to log percentile stats: {e}")
+
     for i in range(len(layers) + 1):
         for name, observer in observers[i].items():
             scale, base = observer.get_quantization_parameters()
@@ -781,9 +822,17 @@ def quantize_model_mamba(model, model_type, tokenizer, device, args, calibration
                     model_name = model_name + f"-{config_name}"
             else:
                 model_name = model_name + f"-w{args.w_bits}a{args.a_bits}"
-            quantized_model_path = os.path.join(args.pretrained_dir, "ut-enyac", model_name)
+            # 使用 output_subdir 参数，默认为 testPercentileRange
+            output_subdir = getattr(args, 'output_subdir', 'testPercentileRange')
+            # percentile_alpha 作为子目录（如果指定）
+            if args.percentile_alpha is not None:
+                pa_str = f"{args.percentile_alpha:.5f}".rstrip('0').rstrip('.')
+                pa_subdir = f"pa-{pa_str}"
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, pa_subdir, model_name)
+            else:
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, "default", model_name)
         else:
-            logging.warning(f"Unsupported model {args.model} in ut-enyac/ model registry")
+            logging.warning(f"Unsupported model {args.model} in yzreproduceauthors/ model registry")
         # load the quantized model if it exists
         if os.path.isdir(quantized_model_path):
             logging.info(f"Loading quantized model from {quantized_model_path}")
@@ -809,14 +858,16 @@ def quantize_model_mamba(model, model_type, tokenizer, device, args, calibration
                                                 num_samples=args.calib_data_num,
                                                 seq_len=args.calib_seqlen,
                                                 calibration_dataset=calibration_dataset,
-                                                preprocess_fn=calib_preprocess_fn)
+                                                preprocess_fn=calib_preprocess_fn,
+                                                percentile_alpha=args.percentile_alpha)
         else:
             # collect 8-bit activation scales
             act_scales = run_quamba_calibration(model, model_type, tokenizer,
                                                 num_samples=args.calib_data_num,
                                                 seq_len=args.calib_seqlen,
                                                 calibration_dataset=calibration_dataset,
-                                                preprocess_fn=calib_preprocess_fn)
+                                                preprocess_fn=calib_preprocess_fn,
+                                                percentile_alpha=args.percentile_alpha)
     elif args.a_bits == 16:
         # not doing anything for activations
         act_scales = {}
@@ -858,7 +909,15 @@ def quantize_model_mamba(model, model_type, tokenizer, device, args, calibration
             model_name = model_name.replace("mamba", "quamba") # replace mamba with quamba
             model_name = model_name + f"-w{args.w_bits}a{args.a_bits}"
 
-            quantized_model_path = os.path.join(args.pretrained_dir, "ut-enyac", model_name)
+            # 使用 output_subdir 参数，默认为 testPercentileRange
+            output_subdir = getattr(args, 'output_subdir', 'testPercentileRange')
+            # percentile_alpha 作为子目录（如果指定）
+            if args.percentile_alpha is not None:
+                pa_str = f"{args.percentile_alpha:.5f}".rstrip('0').rstrip('.')
+                pa_subdir = f"pa-{pa_str}"
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, pa_subdir, model_name)
+            else:
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, "default", model_name)
             # we slightly hack the api: we use MambaLMHeadModel instead of QuambaLMHeadModel to store the model here
             model.config.ssm_cfg['layer'] = model.backbone.layers[0].mixer.__class__.__name__
             model.config.norm_cfg = {"norm": model.backbone.layers[0].norm.__class__.__name__}
@@ -877,7 +936,15 @@ def quantize_model_mamba(model, model_type, tokenizer, device, args, calibration
             if args.hybrid_blocks_config:
                 config_name = args.hybrid_blocks_config.split("/")[-1].replace(".json", "")
                 model_name = model_name + f"-{config_name}"
-            quantized_model_path = os.path.join(args.pretrained_dir, "ut-enyac", model_name)
+            # 使用 output_subdir 参数，默认为 testPercentileRange
+            output_subdir = getattr(args, 'output_subdir', 'testPercentileRange')
+            # percentile_alpha 作为子目录（如果指定）
+            if args.percentile_alpha is not None:
+                pa_str = f"{args.percentile_alpha:.5f}".rstrip('0').rstrip('.')
+                pa_subdir = f"pa-{pa_str}"
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, pa_subdir, model_name)
+            else:
+                quantized_model_path = os.path.join(args.pretrained_dir, output_subdir, "default", model_name)
             
             ssm_layer_infos = []
             norm_infos = []
@@ -903,9 +970,9 @@ def quantize_model_mamba(model, model_type, tokenizer, device, args, calibration
         # store tokenizer for mamba2-8b
         if "mamba2-8b" in args.model:
             # model.save_pretrained should already create the saved dir
-            saved_dir = os.path.join(args.pretrained_dir, "ut-enyac", model_name)
-            tokenizer.save(saved_dir)
-            logging.info(f"Tokenizer is stored at {saved_dir}")
+            # quantized_model_path already computed above
+            tokenizer.save(quantized_model_path)
+            logging.info(f"Tokenizer is stored at {quantized_model_path}")
     # quantized model
     get_model_size(model, args.model, args.w_bits, args.a_bits)
     return model.to(device)

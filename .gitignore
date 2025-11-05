@@ -160,3 +160,42 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# ============================================
+# Project-specific: 排除大文件和数据
+# ============================================
+
+# 模型文件（非常大，不上传）
+pretrained_models/
+
+# 实验日志和结果
+logs/
+
+# Percentile实验的激活值数据（.npz文件）
+percentileRangeResults/*.npz
+
+# 子模块（用submodule管理）
+3rdparty/cutlass/
+3rdparty/fast-hadamard-transform/
+3rdparty/mamba/
+3rdparty/causal-conv1d/
+
+# 临时测试脚本
+claudeYZ_*.py
+claudeYZ_*.patch
+
+# 临时文本记录
+claudeHistory.txt
+代码理解.txt
+作者回复分析.md
+命令对比说明.md
+完整实验文档_汇总.md
+完整实验说明_24个.md
+实验结果汇总表格.md
+实验脚本说明.md
+正确实验说明_20个.md
+现有结果分析报告.md
+
+# Quamba对比文档（可选，根据需要决定是否上传）
+# Quamba1_vs_Quamba2_正确版.md
+# Quamba1_vs_Quamba2_详解.md

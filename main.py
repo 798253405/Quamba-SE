@@ -11,11 +11,20 @@ import os
 from quamba.eval_utils import eval_mamba_few_shot, eval_mamba_generation, evaluate_ppl
 from quamba.modelutils_mamba import quantize_model_mamba
 
-def main(args):    
+def main(args):
     model_name = args.model.lower().split('/')[-1]
     model_type = model_name.split('-')[0] # Assume that the models name is like "model_type-<model_size, model version>"
     assert model_name != None, "Please check the model path."
     logging.info(f"Creating Model:{model_name}")
+
+    # 初始化percentile logger
+    from quamba.percentile_logger import reset_percentile_logger
+    plogger = reset_percentile_logger(
+        log_file="percentileRangeResults/experiments.jsonl",
+        save_activations=True  # 启用激活值保存，用于复现实验
+    )
+    plogger.log_config(args)
+
     model, tokenizer, is_quamba = build_mamba_and_tokenizer(args, model_type)
     model.config.use_cache = False
     logs = {}
@@ -84,7 +93,25 @@ def main(args):
         with open(log_paths, 'a') as fp:
             logging.info(f"Saving result to {log_paths}")
             json.dump(logs, fp, indent=4)
-    
+
+    # 记录最终结果到percentile logger
+    if 'lm_eval' in logs:
+        # 提取accuracy和perplexity
+        for task, results in logs['lm_eval'].items():
+            if 'acc,none' in results and 'perplexity,none' in results:
+                accuracy = results['acc,none']
+                perplexity = results['perplexity,none']
+                plogger.log_results(accuracy, perplexity)
+                break
+
+    # 保存percentile实验日志
+    plogger.print_summary()
+    plogger.save()
+
+    # Print command line for easy screenshot reference
+    print("\n" + "="*80)
+    print(f"  python3 {' '.join(sys.argv)}")
+    print("="*80 + "\n")
 
 if __name__ =='__main__':    
     set_deterministic(1234)

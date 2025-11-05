@@ -92,7 +92,7 @@ ext_modules.append(
             "csrc/embedding/quant_embedding_fwd.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -127,7 +127,7 @@ ext_modules.append(
             "csrc/selective_scan/quant_sscan_fwd.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -167,7 +167,7 @@ ext_modules.append(
                             '-lculibos', '-lcudart', '-lcudart_static',
                             '-lrt', '-lpthread', '-ldl', '-L/usr/lib/x86_64-linux-gnu/'],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -209,7 +209,7 @@ ext_modules.append(
                             '-lculibos', '-lcudart', '-lcudart_static',
                             '-lrt', '-lpthread', '-ldl', '-L/usr/lib/x86_64-linux-gnu/'],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -249,7 +249,7 @@ ext_modules.append(
             "csrc/causal_conv1d/quant_causal_conv1d_update.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -285,7 +285,7 @@ ext_modules.append(
             "csrc/causal_conv1d/quamba2_conv1d_update.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -320,7 +320,7 @@ ext_modules.append(
             "csrc/norm/rms_norm_fwd.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3", "-std=c++17"],
+            "cxx": ["-O1", "-std=c++17"],  # Use -O1 to avoid GCC 11 ICE with PyTorch 2.9 templates
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
@@ -394,7 +394,7 @@ setup(
         "einops",
         "triton",
         "transformers",
-        "causal_conv1d>=1.1.0",
+        # "causal_conv1d>=1.1.0",  # Optional: code has fallback when not available
         "fast_hadamard_transform"
     ],
 )

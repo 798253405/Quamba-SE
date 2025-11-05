@@ -108,7 +108,19 @@ def get_quantize_options(parser):
         '--hybrid_blocks_config', type=str, default=None,
         help='Path to the the configuration for hybrid blocks'
     )
-    
+    parser.add_argument(
+        '--percentile_alpha', type=float, default=None,
+        help='Percentile alpha for calibration observer. '
+        'Default: 0.9995 for mamba/mamba2 basic calibration, 0.99999 for mamba2 reorder calibration. '
+        'Set to 1.0 to disable percentile clipping and use absolute max values.'
+    )
+    parser.add_argument(
+        '--output_subdir', type=str, default='testPercentileRange',
+        help='Parent directory name under pretrained_dir for saving quantized models. '
+        'Default: "testPercentileRange". Model will be saved to {pretrained_dir}/{output_subdir}/pa-{percentile_alpha}/{model_name}/ '
+        'or {pretrained_dir}/{output_subdir}/default/{model_name}/ if percentile_alpha is not specified.'
+    )
+
 def parse_options():
     parser = argparse.ArgumentParser()
     parser.add_argument(

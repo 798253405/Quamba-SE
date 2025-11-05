@@ -1,4 +1,5 @@
 import numpy as np
+import logging
 
 import torch
 import torch.nn as nn
@@ -84,10 +85,39 @@ class PerTensorPercentileObserver:
         self.percentile_sigma = percentile_sigma
         self.percentile_alpha = percentile_alpha
 
+        # 用于记录裁剪前后的统计
+        self.stats_before_percentile = None
+        self.stats_after_percentile = None
+        self.raw_activations = None  # 保存原始激活值（如果需要）
+
     def update(self, w):
         self.has_statistic = True
         #assert w.dim() == 2, "Observer only support 2d tensor, please handle the shape outside."
         w = w.clone().to(torch.float32) # quantile() input must be float
+
+        # 保存第一批激活值（用于复现）
+        if self.raw_activations is None:
+            self.raw_activations = w.detach().clone()
+
+        # 记录裁剪前的真实min/max
+        if self.stats_before_percentile is None:
+            if self.sym:
+                real_max = w.abs().max().item()
+                self.stats_before_percentile = {
+                    "min": 0.0,
+                    "max": real_max,
+                    "range": real_max
+                }
+            else:
+                real_min = w.min().item()
+                real_max = w.max().item()
+                self.stats_before_percentile = {
+                    "min": real_min,
+                    "max": real_max,
+                    "range": real_max - real_min
+                }
+
+        # Percentile裁剪
         if self.sym:
             cur_max = torch.quantile(w.abs().reshape(-1), self.percentile_alpha)
         else:
@@ -106,9 +136,27 @@ class PerTensorPercentileObserver:
             else:
                 self.w_min = self.w_min + self.percentile_sigma * (cur_min - self.w_min)
 
+        # 记录裁剪后的min/max
+        if self.sym:
+            self.stats_after_percentile = {
+                "min": 0.0,
+                "max": self.w_max.item(),
+                "range": self.w_max.item()
+            }
+        else:
+            self.stats_after_percentile = {
+                "min": self.w_min.item(),
+                "max": self.w_max.item(),
+                "range": self.w_max.item() - self.w_min.item()
+            }
+
     def get_quantization_parameters(self):
         assert self.has_statistic, "Please run the invoke the update() once before getting statistic."
-        
+
+        # 添加日志：显示 percentile_alpha 和计算出的 w_max
+        logging.debug(f"PerTensorPercentileObserver: percentile_alpha={self.percentile_alpha:.5f}, "
+                      f"w_max={self.w_max.item():.6f}, clip_ratio={self.clip_ratio}")
+
         return _get_minmax_quantization_params(
             w_max=self.w_max,
             w_min=self.w_min,
@@ -116,6 +164,32 @@ class PerTensorPercentileObserver:
             n_bits=self.n_bits,
             clip_ratio=self.clip_ratio
         )
+
+    def get_stats(self, include_activations=False):
+        """获取裁剪前后的统计信息"""
+        assert self.has_statistic, "Please run update() before getting stats."
+
+        # 计算被裁剪的比例
+        if self.stats_before_percentile and self.stats_after_percentile:
+            range_reduction = (
+                self.stats_before_percentile["range"] - self.stats_after_percentile["range"]
+            ) / self.stats_before_percentile["range"]
+        else:
+            range_reduction = 0.0
+
+        stats = {
+            "before_percentile": self.stats_before_percentile,
+            "after_percentile": self.stats_after_percentile,
+            "percentile_alpha": self.percentile_alpha,
+            "clipped_ratio": 1.0 - self.percentile_alpha,
+            "range_reduction": range_reduction
+        }
+
+        # 如果需要，返回激活值
+        if include_activations:
+            stats["raw_activations"] = self.raw_activations
+
+        return stats
         
 
 class PerSSDGroupObserver:
