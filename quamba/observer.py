@@ -90,6 +90,10 @@ class PerTensorPercentileObserver:
         self.stats_after_percentile = None
         self.raw_activations = None  # 保存原始激活值（如果需要）
 
+        # 用于累积真实的min/max（不经过percentile裁剪）
+        self.real_w_max = None
+        self.real_w_min = None
+
     def update(self, w):
         self.has_statistic = True
         #assert w.dim() == 2, "Observer only support 2d tensor, please handle the shape outside."
@@ -99,23 +103,36 @@ class PerTensorPercentileObserver:
         if self.raw_activations is None:
             self.raw_activations = w.detach().clone()
 
-        # 记录裁剪前的真实min/max
-        if self.stats_before_percentile is None:
-            if self.sym:
-                real_max = w.abs().max().item()
-                self.stats_before_percentile = {
-                    "min": 0.0,
-                    "max": real_max,
-                    "range": real_max
-                }
+        # 累积真实的min/max（不经过percentile裁剪，使用和percentile相同的EMA方法）
+        if self.sym:
+            cur_real_max = w.abs().max()
+            if self.real_w_max is None:
+                self.real_w_max = cur_real_max
             else:
-                real_min = w.min().item()
-                real_max = w.max().item()
-                self.stats_before_percentile = {
-                    "min": real_min,
-                    "max": real_max,
-                    "range": real_max - real_min
-                }
+                self.real_w_max = self.real_w_max + self.percentile_sigma * (cur_real_max - self.real_w_max)
+        else:
+            cur_real_max = w.max()
+            cur_real_min = w.min()
+            if self.real_w_max is None:
+                self.real_w_max = cur_real_max
+                self.real_w_min = cur_real_min
+            else:
+                self.real_w_max = self.real_w_max + self.percentile_sigma * (cur_real_max - self.real_w_max)
+                self.real_w_min = self.real_w_min + self.percentile_sigma * (cur_real_min - self.real_w_min)
+
+        # 记录裁剪前的统计（使用累积的真实值）
+        if self.sym:
+            self.stats_before_percentile = {
+                "min": 0.0,
+                "max": self.real_w_max.item(),
+                "range": self.real_w_max.item()
+            }
+        else:
+            self.stats_before_percentile = {
+                "min": self.real_w_min.item(),
+                "max": self.real_w_max.item(),
+                "range": self.real_w_max.item() - self.real_w_min.item()
+            }
 
         # Percentile裁剪
         if self.sym:
