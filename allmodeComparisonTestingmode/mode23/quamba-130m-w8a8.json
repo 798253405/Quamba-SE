@@ -1,0 +1,42 @@
+{
+    "lm_eval": {
+        "lambada_openai": {
+            "perplexity,none": 26.256522351596153,
+            "perplexity_stderr,none": 7.298449188315391,
+            "acc,none": 0.38,
+            "acc_stderr,none": 0.04878317312145632
+        }
+    },
+    "timestamp": "2025-11-10 14:59:48",
+    "args": {
+        "model": "quamba-130m-w8a8",
+        "verbose": false,
+        "batch_size": 1,
+        "task_list": [
+            "lambada_openai"
+        ],
+        "eval_zero_shot": true,
+        "eval_few_shot": false,
+        "fewshot": 0,
+        "eval_generation": false,
+        "testing": true,
+        "eval_ppl": false,
+        "ppl_dataset": "wikitext2",
+        "log_dir": "allmodeComparison/mode23",
+        "quantize": true,
+        "calib_data_num": 512,
+        "calib_seqlen": 512,
+        "pretrained_dir": "pretrained_models/Quamba1-pa9999/pa-0.9999",
+        "group_heads": false,
+        "quantize_embedding": false,
+        "quantize_lm_head": false,
+        "apply_gptq": false,
+        "w_bits": 8,
+        "a_bits": 8,
+        "hybrid_blocks": false,
+        "hybrid_blocks_config": null,
+        "percentile_alpha": null,
+        "output_subdir": "testPercentileRange",
+        "mode": "2-3"
+    }
+}

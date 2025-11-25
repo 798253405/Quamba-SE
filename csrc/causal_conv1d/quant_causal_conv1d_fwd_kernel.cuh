@@ -413,3 +413,434 @@ void quant_causal_conv1d_channellast_fwd_cuda(QuantConvParamsBase &params, cudaS
     }
 }
 
+
+/**************************************************/
+/*   Mode 5: Causal_conv1d_fwd_kernel_mode5       */
+/*   Same as Mode 0 but outputs FP32 (no quant)  */
+/**************************************************/
+
+// Mode 5 traits: output_t is float instead of int8
+template<int kNThreads_, int kWidth_, bool kIsVecLoad_, typename input_t_, typename weight_t_>
+struct Causal_conv1d_fwd_kernel_mode5_traits {
+    using input_t = input_t_;
+    using weight_t = weight_t_;
+    using output_t = float;  // Mode 5: FP32 output
+    static constexpr int kNThreads = kNThreads_;
+    static constexpr int kWidth = kWidth_;
+    static constexpr int kNBytes = sizeof(input_t);
+    static_assert(kNBytes == 1);
+    static constexpr int kNElts = 8;
+    static_assert(kWidth <= kNElts);
+    static constexpr bool kIsVecLoad = kIsVecLoad_;
+    using vec_t = typename BytesToType<kNBytes * kNElts>::Type;
+    using BlockLoadT = cub::BlockLoad<input_t, kNThreads, kNElts, cub::BLOCK_LOAD_WARP_TRANSPOSE>;
+    using BlockLoadVecT = cub::BlockLoad<vec_t, kNThreads, 1, cub::BLOCK_LOAD_DIRECT>;
+
+    // Mode 5: Store FP32 instead of INT8
+    using BlockStoreFloatT = cub::BlockStore<float, kNThreads, kNElts, cub::BLOCK_STORE_WARP_TRANSPOSE>;
+    using BlockStoreFloatVecT = cub::BlockStore<float4, kNThreads, 2, cub::BLOCK_STORE_DIRECT>;  // 2*float4 = 8 floats
+
+    static constexpr int kSmemIOSize = kIsVecLoad
+        ? 0
+        : std::max({sizeof(typename BlockLoadT::TempStorage), sizeof(typename BlockStoreFloatT::TempStorage)});
+    static constexpr int kSmemExchangeSize = kNThreads * kNBytes * kNElts;
+    static constexpr int kSmemSize = kSmemIOSize + kSmemExchangeSize;
+};
+
+template<typename Ktraits>
+__global__ __launch_bounds__(Ktraits::kNThreads)
+void quant_causal_conv1d_fwd_kernel_mode5(QuantConvParamsBase params) {
+    constexpr int kWidth = Ktraits::kWidth;
+    constexpr int kNThreads = Ktraits::kNThreads;
+    constexpr int kNElts = Ktraits::kNElts;
+    static constexpr bool kIsVecLoad = Ktraits::kIsVecLoad;
+    using input_t = typename Ktraits::input_t;
+    using vec_t = typename Ktraits::vec_t;
+    using weight_t = typename Ktraits::weight_t;
+
+    // Scaling factors
+    float scale_x = params.scale_x;
+    float scale_w = params.scale_w;
+    float scale_b = params.scale_b;
+    // Mode 5: No scale_out needed (no quantization)
+    float scale_wx = scale_w * scale_x;
+
+    // Shared memory.
+    extern __shared__ char smem_[];
+    auto& smem_load = reinterpret_cast<typename Ktraits::BlockLoadT::TempStorage&>(smem_);
+    auto& smem_load_vec = reinterpret_cast<typename Ktraits::BlockLoadVecT::TempStorage&>(smem_);
+    auto& smem_store_float = reinterpret_cast<typename Ktraits::BlockStoreFloatT::TempStorage&>(smem_);
+    auto& smem_store_float_vec = reinterpret_cast<typename Ktraits::BlockStoreFloatVecT::TempStorage&>(smem_);
+    vec_t *smem_exchange = reinterpret_cast<vec_t *>(smem_ + Ktraits::kSmemIOSize);
+
+    const int tidx = threadIdx.x;
+    const int batch_id = blockIdx.x;
+    const int channel_id = blockIdx.y;
+    input_t *x = reinterpret_cast<input_t *>(params.x_ptr) + batch_id * params.x_batch_stride
+        + channel_id * params.x_c_stride;
+    weight_t *weight = reinterpret_cast<weight_t *>(params.weight_ptr) + channel_id * params.weight_c_stride;
+    // Mode 5: Output is float*
+    float *out = reinterpret_cast<float *>(params.out_ptr) + batch_id * params.out_batch_stride
+        + channel_id * params.out_c_stride;
+    float bias_val = params.bias_ptr == nullptr ? 0.f : float(reinterpret_cast<weight_t *>(params.bias_ptr)[channel_id]);
+    bias_val *= scale_b; // dequant
+
+    // Thread 0 will load the last elements of the previous chunk, so we initialize those to 0.
+    if (tidx == 0) {
+        input_t zeros[kNElts] = {0};
+        smem_exchange[kNThreads - 1] = reinterpret_cast<vec_t *>(zeros)[0];
+    }
+
+    float weight_vals[kWidth];
+    #pragma unroll
+    for (int i = 0; i < kWidth; ++i) { weight_vals[i] = float(weight[i * params.weight_width_stride]); }
+
+    constexpr int kChunkSize = kNThreads * kNElts;
+    const int n_chunks = (params.seqlen + kChunkSize - 1) / kChunkSize;
+    for (int chunk = 0; chunk < n_chunks; ++chunk) {
+        input_t x_vals_load[2 * kNElts] = {0};
+        if constexpr(kIsVecLoad) {
+            Ktraits::BlockLoadVecT(smem_load_vec).Load(
+                reinterpret_cast<vec_t*>(x),
+                *reinterpret_cast<vec_t (*)[1]>(&x_vals_load[kNElts]),
+                (params.seqlen - chunk * kChunkSize) / kNElts
+            );
+        } else {
+            __syncthreads();
+            Ktraits::BlockLoadT(smem_load).Load(
+                x,
+                *reinterpret_cast<input_t (*)[kNElts]>(&x_vals_load[kNElts]),
+                params.seqlen - chunk * kChunkSize
+            );
+        }
+        x += kChunkSize;
+        __syncthreads();
+        // Thread kNThreads - 1 don't write yet, so that thread 0 can read
+        // the last elements of the previous chunk.
+        if (tidx < kNThreads - 1) { smem_exchange[tidx] = reinterpret_cast<vec_t *>(x_vals_load)[1]; }
+        __syncthreads();
+        reinterpret_cast<vec_t *>(x_vals_load)[0] = smem_exchange[tidx > 0 ? tidx - 1 : kNThreads - 1];
+        __syncthreads();
+        // Now thread kNThreads - 1 can write the last elements of the current chunk.
+        if (tidx == kNThreads - 1) { smem_exchange[tidx] = reinterpret_cast<vec_t *>(x_vals_load)[1]; }
+
+        float x_vals[2 * kNElts];
+        #pragma unroll
+        for (int i = 0; i < 2 * kNElts; ++i) { x_vals[i] = float(x_vals_load[i]); }
+
+        float out_vals[kNElts];
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) {
+            float out_tmp = 0;
+            #pragma unroll
+            for (int w = 0; w < kWidth; ++w) {
+                out_tmp += weight_vals[w] * x_vals[kNElts + i - (kWidth - w - 1)];
+            }
+            out_vals[i] = scale_wx*out_tmp + bias_val;
+        }
+
+        if (params.silu_activation) {
+            #pragma unroll
+            for (int i = 0; i < kNElts; ++i) {
+                out_vals[i] = out_vals[i] / (1 + expf(-out_vals[i]));
+            }
+        }
+
+        // Mode 5: Direct FP32 output (no quantization)
+        if constexpr(kIsVecLoad) {
+            // Store as float4 vectors (2 float4s = 8 floats)
+            float4 out_vals_vec[2];
+            out_vals_vec[0] = make_float4(out_vals[0], out_vals[1], out_vals[2], out_vals[3]);
+            out_vals_vec[1] = make_float4(out_vals[4], out_vals[5], out_vals[6], out_vals[7]);
+            Ktraits::BlockStoreFloatVecT(smem_store_float_vec).Store(
+                reinterpret_cast<float4*>(out),
+                out_vals_vec,
+                (params.seqlen - chunk * kChunkSize) / 4  // 4 floats per float4
+            );
+        } else {
+            Ktraits::BlockStoreFloatT(smem_store_float).Store(out, out_vals, params.seqlen - chunk * kChunkSize);
+        }
+        out += kChunkSize;
+    }
+}
+
+template<int kNThreads, int kWidth, typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_launch_mode5(QuantConvParamsBase &params, cudaStream_t stream) {
+    static constexpr int kNElts = 8;
+    BOOL_SWITCH(params.seqlen % kNElts == 0, kIsVecLoad, [&] {
+        using Ktraits = Causal_conv1d_fwd_kernel_mode5_traits<kNThreads, kWidth, kIsVecLoad, input_t, weight_t>;
+        constexpr int kSmemSize = Ktraits::kSmemSize;
+        dim3 grid(params.batch, params.dim);
+        auto kernel = &quant_causal_conv1d_fwd_kernel_mode5<Ktraits>;
+        if (kSmemSize >= 48 * 1024) {
+            C10_CUDA_CHECK(cudaFuncSetAttribute(
+                kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+            }
+        kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    });
+}
+
+template<typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_cuda_mode5(QuantConvParamsBase &params, cudaStream_t stream) {
+    if (params.width == 2) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode5<32, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode5<64, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode5<128, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode5<256, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode5<512, 2, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode5<1024, 2, input_t, weight_t>(params, stream);
+        }
+    } else if (params.width == 3) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode5<32, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode5<64, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode5<128, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode5<256, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode5<512, 3, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode5<1024, 3, input_t, weight_t>(params, stream);
+        }
+    } else if (params.width == 4) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode5<32, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode5<64, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode5<128, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode5<256, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode5<512, 4, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode5<1024, 4, input_t, weight_t>(params, stream);
+        }
+    }
+}
+
+
+/**************************************************/
+/*   Mode 6: Causal_conv1d_fwd_kernel_mode6       */
+/*   Same as Mode 5 - outputs FP32 (no quant)    */
+/*   Used for dual-path comparison with Mode 0   */
+/**************************************************/
+
+// Mode 6 traits: identical to Mode 5 - output_t is float instead of int8
+template<int kNThreads_, int kWidth_, bool kIsVecLoad_, typename input_t_, typename weight_t_>
+struct Causal_conv1d_fwd_kernel_mode6_traits {
+    using input_t = input_t_;
+    using weight_t = weight_t_;
+    using output_t = float;  // Mode 6: FP32 output (same as Mode 5)
+    static constexpr int kNThreads = kNThreads_;
+    static constexpr int kWidth = kWidth_;
+    static constexpr int kNBytes = sizeof(input_t);
+    static_assert(kNBytes == 1);
+    static constexpr int kNElts = 8;
+    static_assert(kWidth <= kNElts);
+    static constexpr bool kIsVecLoad = kIsVecLoad_;
+    using vec_t = typename BytesToType<kNBytes * kNElts>::Type;
+    using BlockLoadT = cub::BlockLoad<input_t, kNThreads, kNElts, cub::BLOCK_LOAD_WARP_TRANSPOSE>;
+    using BlockLoadVecT = cub::BlockLoad<vec_t, kNThreads, 1, cub::BLOCK_LOAD_DIRECT>;
+
+    // Mode 6: Store FP32 instead of INT8
+    using BlockStoreFloatT = cub::BlockStore<float, kNThreads, kNElts, cub::BLOCK_STORE_WARP_TRANSPOSE>;
+    using BlockStoreFloatVecT = cub::BlockStore<float4, kNThreads, 2, cub::BLOCK_STORE_DIRECT>;  // 2*float4 = 8 floats
+
+    static constexpr int kSmemIOSize = kIsVecLoad
+        ? 0
+        : std::max({sizeof(typename BlockLoadT::TempStorage), sizeof(typename BlockStoreFloatT::TempStorage)});
+    static constexpr int kSmemExchangeSize = kNThreads * kNBytes * kNElts;
+    static constexpr int kSmemSize = kSmemIOSize + kSmemExchangeSize;
+};
+
+template<typename Ktraits>
+__global__ __launch_bounds__(Ktraits::kNThreads)
+void quant_causal_conv1d_fwd_kernel_mode6(QuantConvParamsBase params) {
+    constexpr int kWidth = Ktraits::kWidth;
+    constexpr int kNThreads = Ktraits::kNThreads;
+    constexpr int kNElts = Ktraits::kNElts;
+    static constexpr bool kIsVecLoad = Ktraits::kIsVecLoad;
+    using input_t = typename Ktraits::input_t;
+    using vec_t = typename Ktraits::vec_t;
+    using weight_t = typename Ktraits::weight_t;
+
+    // Scaling factors
+    float scale_x = params.scale_x;
+    float scale_w = params.scale_w;
+    float scale_b = params.scale_b;
+    // Mode 6: No scale_out needed (no quantization)
+    float scale_wx = scale_w * scale_x;
+
+    // Shared memory.
+    extern __shared__ char smem_[];
+    auto& smem_load = reinterpret_cast<typename Ktraits::BlockLoadT::TempStorage&>(smem_);
+    auto& smem_load_vec = reinterpret_cast<typename Ktraits::BlockLoadVecT::TempStorage&>(smem_);
+    auto& smem_store_float = reinterpret_cast<typename Ktraits::BlockStoreFloatT::TempStorage&>(smem_);
+    auto& smem_store_float_vec = reinterpret_cast<typename Ktraits::BlockStoreFloatVecT::TempStorage&>(smem_);
+    vec_t *smem_exchange = reinterpret_cast<vec_t *>(smem_ + Ktraits::kSmemIOSize);
+
+    const int tidx = threadIdx.x;
+    const int batch_id = blockIdx.x;
+    const int channel_id = blockIdx.y;
+    input_t *x = reinterpret_cast<input_t *>(params.x_ptr) + batch_id * params.x_batch_stride
+        + channel_id * params.x_c_stride;
+    weight_t *weight = reinterpret_cast<weight_t *>(params.weight_ptr) + channel_id * params.weight_c_stride;
+    // Mode 6: Output is float*
+    float *out = reinterpret_cast<float *>(params.out_ptr) + batch_id * params.out_batch_stride
+        + channel_id * params.out_c_stride;
+    float bias_val = params.bias_ptr == nullptr ? 0.f : float(reinterpret_cast<weight_t *>(params.bias_ptr)[channel_id]);
+    bias_val *= scale_b; // dequant
+
+    // Thread 0 will load the last elements of the previous chunk, so we initialize those to 0.
+    if (tidx == 0) {
+        input_t zeros[kNElts] = {0};
+        smem_exchange[kNThreads - 1] = reinterpret_cast<vec_t *>(zeros)[0];
+    }
+
+    float weight_vals[kWidth];
+    #pragma unroll
+    for (int i = 0; i < kWidth; ++i) { weight_vals[i] = float(weight[i * params.weight_width_stride]); }
+
+    constexpr int kChunkSize = kNThreads * kNElts;
+    const int n_chunks = (params.seqlen + kChunkSize - 1) / kChunkSize;
+    for (int chunk = 0; chunk < n_chunks; ++chunk) {
+        input_t x_vals_load[2 * kNElts] = {0};
+        if constexpr(kIsVecLoad) {
+            Ktraits::BlockLoadVecT(smem_load_vec).Load(
+                reinterpret_cast<vec_t*>(x),
+                *reinterpret_cast<vec_t (*)[1]>(&x_vals_load[kNElts]),
+                (params.seqlen - chunk * kChunkSize) / kNElts
+            );
+        } else {
+            __syncthreads();
+            Ktraits::BlockLoadT(smem_load).Load(
+                x,
+                *reinterpret_cast<input_t (*)[kNElts]>(&x_vals_load[kNElts]),
+                params.seqlen - chunk * kChunkSize
+            );
+        }
+        x += kChunkSize;
+        __syncthreads();
+        // Thread kNThreads - 1 don't write yet, so that thread 0 can read
+        // the last elements of the previous chunk.
+        if (tidx < kNThreads - 1) { smem_exchange[tidx] = reinterpret_cast<vec_t *>(x_vals_load)[1]; }
+        __syncthreads();
+        reinterpret_cast<vec_t *>(x_vals_load)[0] = smem_exchange[tidx > 0 ? tidx - 1 : kNThreads - 1];
+        __syncthreads();
+        // Now thread kNThreads - 1 can write the last elements of the current chunk.
+        if (tidx == kNThreads - 1) { smem_exchange[tidx] = reinterpret_cast<vec_t *>(x_vals_load)[1]; }
+
+        float x_vals[2 * kNElts];
+        #pragma unroll
+        for (int i = 0; i < 2 * kNElts; ++i) { x_vals[i] = float(x_vals_load[i]); }
+
+        float out_vals[kNElts];
+        #pragma unroll
+        for (int i = 0; i < kNElts; ++i) {
+            float out_tmp = 0;
+            #pragma unroll
+            for (int w = 0; w < kWidth; ++w) {
+                out_tmp += weight_vals[w] * x_vals[kNElts + i - (kWidth - w - 1)];
+            }
+            out_vals[i] = scale_wx*out_tmp + bias_val;
+        }
+
+        if (params.silu_activation) {
+            #pragma unroll
+            for (int i = 0; i < kNElts; ++i) {
+                out_vals[i] = out_vals[i] / (1 + expf(-out_vals[i]));
+            }
+        }
+
+        // Mode 6: Direct FP32 output (no quantization, same as Mode 5)
+        if constexpr(kIsVecLoad) {
+            // Store as float4 vectors (2 float4s = 8 floats)
+            float4 out_vals_vec[2];
+            out_vals_vec[0] = make_float4(out_vals[0], out_vals[1], out_vals[2], out_vals[3]);
+            out_vals_vec[1] = make_float4(out_vals[4], out_vals[5], out_vals[6], out_vals[7]);
+            Ktraits::BlockStoreFloatVecT(smem_store_float_vec).Store(
+                reinterpret_cast<float4*>(out),
+                out_vals_vec,
+                (params.seqlen - chunk * kChunkSize) / 4  // 4 floats per float4
+            );
+        } else {
+            Ktraits::BlockStoreFloatT(smem_store_float).Store(out, out_vals, params.seqlen - chunk * kChunkSize);
+        }
+        out += kChunkSize;
+    }
+}
+
+template<int kNThreads, int kWidth, typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_launch_mode6(QuantConvParamsBase &params, cudaStream_t stream) {
+    static constexpr int kNElts = 8;
+    BOOL_SWITCH(params.seqlen % kNElts == 0, kIsVecLoad, [&] {
+        using Ktraits = Causal_conv1d_fwd_kernel_mode6_traits<kNThreads, kWidth, kIsVecLoad, input_t, weight_t>;
+        constexpr int kSmemSize = Ktraits::kSmemSize;
+        dim3 grid(params.batch, params.dim);
+        auto kernel = &quant_causal_conv1d_fwd_kernel_mode6<Ktraits>;
+        if (kSmemSize >= 48 * 1024) {
+            C10_CUDA_CHECK(cudaFuncSetAttribute(
+                kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+            }
+        kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    });
+}
+
+template<typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_cuda_mode6(QuantConvParamsBase &params, cudaStream_t stream) {
+    if (params.width == 2) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode6<32, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode6<64, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode6<128, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode6<256, 2, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode6<512, 2, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode6<1024, 2, input_t, weight_t>(params, stream);
+        }
+    } else if (params.width == 3) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode6<32, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode6<64, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode6<128, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode6<256, 3, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode6<512, 3, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode6<1024, 3, input_t, weight_t>(params, stream);
+        }
+    } else if (params.width == 4) {
+        if (params.seqlen <= 256) {
+            quant_causal_conv1d_fwd_launch_mode6<32, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 512) {
+            quant_causal_conv1d_fwd_launch_mode6<64, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 1024) {
+            quant_causal_conv1d_fwd_launch_mode6<128, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 2048) {
+            quant_causal_conv1d_fwd_launch_mode6<256, 4, input_t, weight_t>(params, stream);
+        } else if (params.seqlen <= 4096){
+            quant_causal_conv1d_fwd_launch_mode6<512, 4, input_t, weight_t>(params, stream);
+        } else {
+            quant_causal_conv1d_fwd_launch_mode6<1024, 4, input_t, weight_t>(params, stream);
+        }
+    }
+}
+

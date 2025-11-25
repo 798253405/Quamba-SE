@@ -1,0 +1,9 @@
+{
+  "layer_0": {},
+  "layer_23": {},
+  "timestamp": "2025-11-10 16:44:15",
+  "mode": "2-0",
+  "num_samples": 1,
+  "seq_length": 512,
+  "model_dtype": "torch.float16"
+}

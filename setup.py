@@ -7,7 +7,7 @@ import os
 import re
 import ast
 from pathlib import Path
-from packaging.version import parse, Version
+from distutils.version import LooseVersion as Version; parse = Version
 
 from setuptools import setup, find_packages
 import subprocess

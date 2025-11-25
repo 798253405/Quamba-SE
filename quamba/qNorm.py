@@ -40,8 +40,12 @@ class QRMSNorm(torch.nn.Module):
         return state_dict
         
     def load_hook(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        self.output_scale = state_dict[prefix + 'output_scale']
-        del state_dict[prefix + 'output_scale']
+        # Handle backward compatibility: if output_scale is not in state_dict, set to None
+        if prefix + 'output_scale' in state_dict:
+            self.output_scale = state_dict[prefix + 'output_scale']
+            del state_dict[prefix + 'output_scale']
+        else:
+            self.output_scale = None
 
     def to(self, *args, **kwargs):
         super(QRMSNorm, self).to(*args, **kwargs)
@@ -137,10 +141,18 @@ class QRMSNormGated(torch.nn.Module):
         return state_dict
         
     def load_hook(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        self.z_scale = state_dict[prefix + 'z_scale']
-        self.output_scale = state_dict[prefix + 'output_scale']
-        del state_dict[prefix + 'z_scale']
-        del state_dict[prefix + 'output_scale']
+        # Handle backward compatibility: if scales are not in state_dict, set to default values
+        if prefix + 'z_scale' in state_dict:
+            self.z_scale = state_dict[prefix + 'z_scale']
+            del state_dict[prefix + 'z_scale']
+        else:
+            self.z_scale = 0.0
+
+        if prefix + 'output_scale' in state_dict:
+            self.output_scale = state_dict[prefix + 'output_scale']
+            del state_dict[prefix + 'output_scale']
+        else:
+            self.output_scale = 0.0
 
     def forward(self, x, q_z=None):
         """If q_z is not None, we do norm(x) * silu(z) if norm_before_gate, else norm(x * silu(z))

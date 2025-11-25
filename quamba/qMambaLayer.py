@@ -671,25 +671,220 @@ class W4A8QMamba(nn.Module):
             conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
         x = self.conv1d.forward(x)
 
-        # Compute dt, B, C
-        x_reshape = rearrange(x, "b d l -> b l d").contiguous()
-        x_dbl = self.x_proj(x_reshape)  # (bl d)
-        dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-        
-        # Compute dt proj with x_proj_scale
-        dt = self.dt_proj.to_seqlen_last(dt.contiguous())
-        B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
-        C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
-        
-        # SSM step and return ssm_state
-        y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
+        # Check if FP32 SSM mode is enabled (requires requantization for x_proj)
+        import os
+        fp32_mode_enabled = (
+            os.environ.get('FLOAT_SIM_ASIC_INT8', 'false').lower() == 'true' or
+            os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true' or
+            os.environ.get('CONV1D_MODE3_FP32', 'false').lower() == 'true'
+        )
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # # Only debug last layer (layer_idx == 23 for 24-layer model)
+        # DEBUG_ENABLED = self.layer_idx is not None and self.layer_idx == 23
+        # if DEBUG_ENABLED:
+        #     if not hasattr(self, '_debug_step_count'):
+        #         self._debug_step_count = 0
+        #     self._debug_step_count += 1
+        #     # Only print first 3 calls for this layer
+        #     if self._debug_step_count <= 3:
+        #         print(f"\n{'='*80}")
+        #         print(f"[Layer {self.layer_idx} Call #{self._debug_step_count}] After Conv1D")
+        #         print(f"  x dtype: {x.dtype}, shape: {x.shape}")
+        #         x_vals = x.flatten()[:10]
+        #         print(f"  First 10 values (high precision):")
+        #         for i in range(min(10, x_vals.numel())):
+        #             print(f"    x[{i}] = {x_vals[i]:.12f}" if x.dtype == torch.float32 else f"    x[{i}] = {x_vals[i]}")
+        #         if hasattr(x, '_dual_scale_overflow_mask'):
+        #             print(f"  x has dual-scale metadata (outliers: {x._dual_scale_overflow_mask.sum().item()})")
+
+        #         # Print all scales for this layer (first call only)
+        #         if self._debug_step_count == 1:
+        #             print(f"\n  === Layer {self.layer_idx} All Scales ===")
+        #             print(f"  in_proj scales:")
+        #             if hasattr(self.in_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.in_proj.input_scale:.10f}")
+        #             if hasattr(self.in_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.in_proj.weight_scale:.10f}")
+        #             if hasattr(self.in_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.in_proj.output_scale:.10f}")
+
+        #             print(f"  conv1d scales:")
+        #             print(f"    input_scale: {self.conv1d.input_scale:.10f}")
+        #             print(f"    weight_scale: {self.conv1d.weight_scale:.10f}")
+        #             if hasattr(self.conv1d, 'bias_scale') and self.conv1d.bias_scale is not None:
+        #                 print(f"    bias_scale: {self.conv1d.bias_scale:.10f}")
+        #             print(f"    output_scale: {self.conv1d.output_scale:.10f}")
+
+        #             print(f"  x_proj scales:")
+        #             if hasattr(self.x_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.x_proj.input_scale:.10f}")
+        #             if hasattr(self.x_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.x_proj.weight_scale:.10f}")
+        #             if hasattr(self.x_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.x_proj.output_scale:.10f}")
+
+        #             print(f"  selective_scan scales:")
+        #             if hasattr(self.selective_scan, 'u_scale'):
+        #                 print(f"    u_scale: {self.selective_scan.u_scale:.10f}")
+        #             if hasattr(self.selective_scan, 'dt_scale'):
+        #                 print(f"    dt_scale: {self.selective_scan.dt_scale:.10f}")
+
+        #             print(f"  out_proj scales:")
+        #             if hasattr(self.out_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.out_proj.input_scale:.10f}")
+        #             if hasattr(self.out_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.out_proj.weight_scale:.10f}")
+        #             if hasattr(self.out_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.out_proj.output_scale:.10f}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
+        # Convert Conv1D output for use in SSM
+        # Different modes have different requirements for SSM input dtype
+        if fp32_mode_enabled:
+            # Check mode-specific environment variables
+            ssm_use_pytorch_int8 = os.environ.get('SSM_USE_PYTORCH_INT8', 'false').lower() == 'true'
+            conv1d_mode23_fp32 = os.environ.get('CONV1D_MODE23_FP32', 'false').lower() == 'true'
+
+            if x.dtype == torch.int8:
+                # x is INT8 from Conv1D (Mode 2-0, 2-1, 2-2, 2-3 when FLOAT_SIM_ASIC_INT8=true)
+                x_for_xproj = x  # INT8 for x_proj
+
+                # Mode 2-1: Keep INT8 for PyTorch INT8 SSM (direct pass, no dequant)
+                # Mode 2-0, 2-2: Dequantize to FP32 for SSM
+                if ssm_use_pytorch_int8 and not conv1d_mode23_fp32:
+                    # Mode 2-1: PyTorch INT8 SSM expects INT8 input directly
+                    x_for_ssm = x  # Keep INT8
+                else:
+                    # Mode 2-0 (CUDA INT8 SSM with requant), Mode 2-2 (FP32 SSM)
+                    x_for_ssm = x.float() * self.conv1d.output_scale  # Dequantize to FP32
+            elif x.dtype == torch.float32:
+                # x is FP32 from Conv1D (Mode 2-3, 2-4)
+                # Requantize to INT8 for x_proj, keep FP32 for SSM
+                x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+                x_for_ssm = x  # Keep FP32 for SSM
+            else:
+                raise ValueError(f"Unexpected dtype in fp32_mode_enabled: {x.dtype}")
+
+            # Compute dt, B, C using INT8
+            x_reshape = rearrange(x_for_xproj, "b d l -> b l d").contiguous()
+            x_dbl = self.x_proj(x_reshape)  # (bl d)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+
+            # Compute dt proj with x_proj_scale
+            dt = self.dt_proj.to_seqlen_last(dt.contiguous())
+            B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
+            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
+            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # Print Layer 24 SSM scales (before SSM forward) - only once
+            if self.layer_idx == 23:
+                if not hasattr(self, '_ssm_scales_printed'):
+                    self._ssm_scales_printed = False
+
+                if not self._ssm_scales_printed:
+                    print(f"\n{'='*80}")
+                    print(f"[Layer 24 / layer_idx {self.layer_idx}] SSM Scales")
+                    print(f"{'='*80}")
+                    print(f"  Location: qMambaLayer.py forward() - fp32_mode_enabled branch")
+                    print(f"  ")
+                    print(f"  SSM Input Data (before SSM.forward):")
+                    print(f"    u dtype: {x_for_ssm.dtype}")
+                    print(f"    u first 5 values [0,0,:5]: {x_for_ssm[0, 0, :5].tolist()}")
+                    print(f"    dt first 5 values [0,0,:5]: {dt[0, 0, :5].tolist()}")
+                    print(f"    B first 5 values [0,0,:5]: {B[0, 0, :5].tolist()}")
+                    print(f"    C first 5 values [0,0,:5]: {C[0, 0, :5].tolist()}")
+                    print(f"    dt/B/C dtype: {dt.dtype}")
+                    print(f"  ")
+                    print(f"  SSM Scales (from self.selective_scan / QSScan):")
+                    print(f"    u_scale          = {self.selective_scan.u_scale.item():.10f}  (for SSM input u)")
+                    print(f"    dt_scale         = {self.selective_scan.dt_scale.item():.10f}  (for dt)")
+                    print(f"    B_scale          = {self.selective_scan.B_scale.item():.10f}  (for B)")
+                    print(f"    C_scale          = {self.selective_scan.C_scale.item():.10f}  (for C)")
+                    print(f"    A_scale          = {self.selective_scan.A_scale.item():.10f}  (for A)")
+                    print(f"    D_scale          = {self.selective_scan.D_scale.item():.10f}  (for D)")
+                    print(f"    z_scale          = {self.selective_scan.z_scale.item():.10f}  (for z)")
+                    print(f"    ssm_state_scale  = {self.selective_scan.ssm_state_scale.item():.10f}  (for state)")
+                    print(f"    dt_bias_scale    = {self.selective_scan.dt_bias_scale.item():.10f}  (for dt_bias)")
+                    print(f"  ")
+                    print(f"  ⚠️  Important: Conv1D output_scale should match SSM u_scale")
+                    print(f"    (Conv1D output_scale printed above)")
+                    print(f"    SSM u_scale = {self.selective_scan.u_scale.item():.10f}")
+                    print(f"{'='*80}\n")
+                    self._ssm_scales_printed = True
+
+                    # Quick verification mode: exit after printing Layer 24 SSM scales
+                    if os.environ.get('QUICK_VERIFY', 'false').lower() == 'true':
+                        print("🔍 QUICK_VERIFY mode: Exiting after Layer 24 SSM input data print")
+                        import sys
+                        sys.exit(0)
+
+            # ===== DUAL MODE DEBUG: Compare Mode 2-0 vs 2-1 =====
+            # Run for ALL samples (remove the hasattr check)
+            if self.layer_idx == 23 and os.environ.get('DUAL_MODE_DEBUG', 'false').lower() == 'true':
+                dual_mode_compare_ssm(self, x, dt, B, C, z, self.conv1d.output_scale)
+
+            # SSM with FP32 input (ONLY u is FP32, dt/B/C are INT8)
+            y = self.selective_scan.forward(x_for_ssm, dt, B, C, z=z, return_last_state=ssm_state is not None)
+        else:
+            # Original INT8 path (completely unchanged)
+            x_reshape = rearrange(x, "b d l -> b l d").contiguous()
+            x_dbl = self.x_proj(x_reshape)  # (bl d)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After x_proj: x_dbl dtype: {x_dbl.dtype}, first 3: {x_dbl.flatten()[:3].tolist()}")
+            #     print(f"  dt (before dt_proj) dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # Compute dt proj with x_proj_scale
+            dt = self.dt_proj.to_seqlen_last(dt.contiguous())
+            B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
+            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
+            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # SSM step and return ssm_state
+            y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
         if ssm_state is not None:
             y, last_state = y # y: fp16, last_state: fp32
             ssm_state.copy_(last_state) # last_state: fp32 copy to ssm_state: fp16
-        
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After SSM: y dtype: {y.dtype}, first 3: {y.flatten()[:3].tolist()}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         # Output projection
         y = self.had(y) # input fp16, output is int8
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After had: y dtype: {y.dtype}, first 3: {y.flatten()[:3].tolist()}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         out = self.out_proj(y) # HadW8A8BF16OF16Linear: input int8, output is fp16
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After out_proj: out dtype: {out.dtype}, first 3: {out.flatten()[:3].tolist()}")
+        #     print(f"{'='*80}\n")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -919,25 +1114,220 @@ class W8A8QMamba(nn.Module):
             conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
         x = self.conv1d.forward(x)
 
-        # Compute dt, B, C
-        x_reshape = rearrange(x, "b d l -> b l d").contiguous()
-        x_dbl = self.x_proj(x_reshape)  # (bl d)
-        dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-        
-        # Compute dt proj with x_proj_scale
-        dt = self.dt_proj.to_seqlen_last(dt.contiguous())
-        B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
-        C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
-        
-        # SSM step and return ssm_state
-        y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
+        # Check if FP32 SSM mode is enabled (requires requantization for x_proj)
+        import os
+        fp32_mode_enabled = (
+            os.environ.get('FLOAT_SIM_ASIC_INT8', 'false').lower() == 'true' or
+            os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true' or
+            os.environ.get('CONV1D_MODE3_FP32', 'false').lower() == 'true'
+        )
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # # Only debug last layer (layer_idx == 23 for 24-layer model)
+        # DEBUG_ENABLED = self.layer_idx is not None and self.layer_idx == 23
+        # if DEBUG_ENABLED:
+        #     if not hasattr(self, '_debug_step_count'):
+        #         self._debug_step_count = 0
+        #     self._debug_step_count += 1
+        #     # Only print first 3 calls for this layer
+        #     if self._debug_step_count <= 3:
+        #         print(f"\n{'='*80}")
+        #         print(f"[Layer {self.layer_idx} Call #{self._debug_step_count}] After Conv1D")
+        #         print(f"  x dtype: {x.dtype}, shape: {x.shape}")
+        #         x_vals = x.flatten()[:10]
+        #         print(f"  First 10 values (high precision):")
+        #         for i in range(min(10, x_vals.numel())):
+        #             print(f"    x[{i}] = {x_vals[i]:.12f}" if x.dtype == torch.float32 else f"    x[{i}] = {x_vals[i]}")
+        #         if hasattr(x, '_dual_scale_overflow_mask'):
+        #             print(f"  x has dual-scale metadata (outliers: {x._dual_scale_overflow_mask.sum().item()})")
+
+        #         # Print all scales for this layer (first call only)
+        #         if self._debug_step_count == 1:
+        #             print(f"\n  === Layer {self.layer_idx} All Scales ===")
+        #             print(f"  in_proj scales:")
+        #             if hasattr(self.in_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.in_proj.input_scale:.10f}")
+        #             if hasattr(self.in_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.in_proj.weight_scale:.10f}")
+        #             if hasattr(self.in_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.in_proj.output_scale:.10f}")
+
+        #             print(f"  conv1d scales:")
+        #             print(f"    input_scale: {self.conv1d.input_scale:.10f}")
+        #             print(f"    weight_scale: {self.conv1d.weight_scale:.10f}")
+        #             if hasattr(self.conv1d, 'bias_scale') and self.conv1d.bias_scale is not None:
+        #                 print(f"    bias_scale: {self.conv1d.bias_scale:.10f}")
+        #             print(f"    output_scale: {self.conv1d.output_scale:.10f}")
+
+        #             print(f"  x_proj scales:")
+        #             if hasattr(self.x_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.x_proj.input_scale:.10f}")
+        #             if hasattr(self.x_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.x_proj.weight_scale:.10f}")
+        #             if hasattr(self.x_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.x_proj.output_scale:.10f}")
+
+        #             print(f"  selective_scan scales:")
+        #             if hasattr(self.selective_scan, 'u_scale'):
+        #                 print(f"    u_scale: {self.selective_scan.u_scale:.10f}")
+        #             if hasattr(self.selective_scan, 'dt_scale'):
+        #                 print(f"    dt_scale: {self.selective_scan.dt_scale:.10f}")
+
+        #             print(f"  out_proj scales:")
+        #             if hasattr(self.out_proj, 'input_scale'):
+        #                 print(f"    input_scale: {self.out_proj.input_scale:.10f}")
+        #             if hasattr(self.out_proj, 'weight_scale'):
+        #                 print(f"    weight_scale: {self.out_proj.weight_scale:.10f}")
+        #             if hasattr(self.out_proj, 'output_scale'):
+        #                 print(f"    output_scale: {self.out_proj.output_scale:.10f}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
+        # Convert Conv1D output for use in SSM
+        # Different modes have different requirements for SSM input dtype
+        if fp32_mode_enabled:
+            # Check mode-specific environment variables
+            ssm_use_pytorch_int8 = os.environ.get('SSM_USE_PYTORCH_INT8', 'false').lower() == 'true'
+            conv1d_mode23_fp32 = os.environ.get('CONV1D_MODE23_FP32', 'false').lower() == 'true'
+
+            if x.dtype == torch.int8:
+                # x is INT8 from Conv1D (Mode 2-0, 2-1, 2-2, 2-3 when FLOAT_SIM_ASIC_INT8=true)
+                x_for_xproj = x  # INT8 for x_proj
+
+                # Mode 2-1: Keep INT8 for PyTorch INT8 SSM (direct pass, no dequant)
+                # Mode 2-0, 2-2: Dequantize to FP32 for SSM
+                if ssm_use_pytorch_int8 and not conv1d_mode23_fp32:
+                    # Mode 2-1: PyTorch INT8 SSM expects INT8 input directly
+                    x_for_ssm = x  # Keep INT8
+                else:
+                    # Mode 2-0 (CUDA INT8 SSM with requant), Mode 2-2 (FP32 SSM)
+                    x_for_ssm = x.float() * self.conv1d.output_scale  # Dequantize to FP32
+            elif x.dtype == torch.float32:
+                # x is FP32 from Conv1D (Mode 2-3, 2-4)
+                # Requantize to INT8 for x_proj, keep FP32 for SSM
+                x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+                x_for_ssm = x  # Keep FP32 for SSM
+            else:
+                raise ValueError(f"Unexpected dtype in fp32_mode_enabled: {x.dtype}")
+
+            # Compute dt, B, C using INT8
+            x_reshape = rearrange(x_for_xproj, "b d l -> b l d").contiguous()
+            x_dbl = self.x_proj(x_reshape)  # (bl d)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+
+            # Compute dt proj with x_proj_scale
+            dt = self.dt_proj.to_seqlen_last(dt.contiguous())
+            B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
+            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
+            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # Print Layer 24 SSM scales (before SSM forward) - only once
+            if self.layer_idx == 23:
+                if not hasattr(self, '_ssm_scales_printed'):
+                    self._ssm_scales_printed = False
+
+                if not self._ssm_scales_printed:
+                    print(f"\n{'='*80}")
+                    print(f"[Layer 24 / layer_idx {self.layer_idx}] SSM Scales")
+                    print(f"{'='*80}")
+                    print(f"  Location: qMambaLayer.py forward() - fp32_mode_enabled branch")
+                    print(f"  ")
+                    print(f"  SSM Input Data (before SSM.forward):")
+                    print(f"    u dtype: {x_for_ssm.dtype}")
+                    print(f"    u first 5 values [0,0,:5]: {x_for_ssm[0, 0, :5].tolist()}")
+                    print(f"    dt first 5 values [0,0,:5]: {dt[0, 0, :5].tolist()}")
+                    print(f"    B first 5 values [0,0,:5]: {B[0, 0, :5].tolist()}")
+                    print(f"    C first 5 values [0,0,:5]: {C[0, 0, :5].tolist()}")
+                    print(f"    dt/B/C dtype: {dt.dtype}")
+                    print(f"  ")
+                    print(f"  SSM Scales (from self.selective_scan / QSScan):")
+                    print(f"    u_scale          = {self.selective_scan.u_scale.item():.10f}  (for SSM input u)")
+                    print(f"    dt_scale         = {self.selective_scan.dt_scale.item():.10f}  (for dt)")
+                    print(f"    B_scale          = {self.selective_scan.B_scale.item():.10f}  (for B)")
+                    print(f"    C_scale          = {self.selective_scan.C_scale.item():.10f}  (for C)")
+                    print(f"    A_scale          = {self.selective_scan.A_scale.item():.10f}  (for A)")
+                    print(f"    D_scale          = {self.selective_scan.D_scale.item():.10f}  (for D)")
+                    print(f"    z_scale          = {self.selective_scan.z_scale.item():.10f}  (for z)")
+                    print(f"    ssm_state_scale  = {self.selective_scan.ssm_state_scale.item():.10f}  (for state)")
+                    print(f"    dt_bias_scale    = {self.selective_scan.dt_bias_scale.item():.10f}  (for dt_bias)")
+                    print(f"  ")
+                    print(f"  ⚠️  Important: Conv1D output_scale should match SSM u_scale")
+                    print(f"    (Conv1D output_scale printed above)")
+                    print(f"    SSM u_scale = {self.selective_scan.u_scale.item():.10f}")
+                    print(f"{'='*80}\n")
+                    self._ssm_scales_printed = True
+
+                    # Quick verification mode: exit after printing Layer 24 SSM scales
+                    if os.environ.get('QUICK_VERIFY', 'false').lower() == 'true':
+                        print("🔍 QUICK_VERIFY mode: Exiting after Layer 24 SSM input data print")
+                        import sys
+                        sys.exit(0)
+
+            # ===== DUAL MODE DEBUG: Compare Mode 2-0 vs 2-1 =====
+            # Run for ALL samples (remove the hasattr check)
+            if self.layer_idx == 23 and os.environ.get('DUAL_MODE_DEBUG', 'false').lower() == 'true':
+                dual_mode_compare_ssm(self, x, dt, B, C, z, self.conv1d.output_scale)
+
+            # SSM with FP32 input (ONLY u is FP32, dt/B/C are INT8)
+            y = self.selective_scan.forward(x_for_ssm, dt, B, C, z=z, return_last_state=ssm_state is not None)
+        else:
+            # Original INT8 path (completely unchanged)
+            x_reshape = rearrange(x, "b d l -> b l d").contiguous()
+            x_dbl = self.x_proj(x_reshape)  # (bl d)
+            dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After x_proj: x_dbl dtype: {x_dbl.dtype}, first 3: {x_dbl.flatten()[:3].tolist()}")
+            #     print(f"  dt (before dt_proj) dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # Compute dt proj with x_proj_scale
+            dt = self.dt_proj.to_seqlen_last(dt.contiguous())
+            B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
+            C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
+
+            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+            # if DEBUG_ENABLED and self._debug_step_count <= 3:
+            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
+            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
+            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
+            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
+            # # ===== END TEMPORARY DEBUG CODE =====
+
+            # SSM step and return ssm_state
+            y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
         if ssm_state is not None:
             y, last_state = y # y: fp16, last_state: fp32
             ssm_state.copy_(last_state) # last_state: fp32 copy to ssm_state: fp16
-        
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After SSM: y dtype: {y.dtype}, first 3: {y.flatten()[:3].tolist()}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         # Output projection
         y = self.had(y) # input fp16, output is int8
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After had: y dtype: {y.dtype}, first 3: {y.flatten()[:3].tolist()}")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         out = self.out_proj(y) # HadW8A8BF16OF16Linear: input int8, output is fp16
+
+        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
+        # if DEBUG_ENABLED and self._debug_step_count <= 3:
+        #     print(f"  After out_proj: out dtype: {out.dtype}, first 3: {out.flatten()[:3].tolist()}")
+        #     print(f"{'='*80}\n")
+        # # ===== END TEMPORARY DEBUG CODE =====
+
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -1002,3 +1392,375 @@ class W8A8QMamba(nn.Module):
                 conv_state.zero_()
                 ssm_state.zero_()
         return conv_state, ssm_state
+
+# ===== DUAL MODE COMPARISON HELPER FUNCTION =====
+# Global accumulator for all samples
+_dual_mode_stats = {
+    'sample_count': 0,
+    'total_mean_diff': 0.0,
+    'total_max_diff': 0.0,
+    'all_diffs': []
+}
+
+def dual_mode_compare_ssm(layer_self, x, dt, B, C, z, output_scale):
+    """
+    Helper function to compare Mode 2-0 vs Mode 2-1 SSM outputs.
+    Called when DUAL_MODE_DEBUG=true.
+    Accumulates statistics across ALL samples.
+
+    Args:
+        layer_self: The MambaLayer instance
+        x: Conv1D output (INT8)
+        dt, B, C, z: SSM inputs
+        output_scale: Conv1D output scale for dequantization
+    """
+    import torch
+    import os
+    global _dual_mode_stats
+
+    # Only print details for first sample
+    if _dual_mode_stats['sample_count'] == 0:
+        print(f"\n{'='*80}")
+        print(f"🔬 DUAL MODE COMPARISON - Layer {layer_self.layer_idx}")
+        print(f"{'='*80}")
+        print(f"📊 Conv1D Output (Sample 1, shared input for both modes):")
+        print(f"    dtype: {x.dtype}")
+        print(f"    first 5 values [0,0,:5]: {x[0, 0, :5].tolist()}")
+        print(f"    output_scale: {output_scale:.10f}")
+        print(f"")
+
+    # Prepare inputs for BOTH modes
+    x_mode20_fp32 = x.float() * output_scale  # Mode 2-0: dequantize to FP32
+    x_mode21_int8 = x  # Mode 2-1: keep INT8
+
+    if _dual_mode_stats['sample_count'] == 0:
+        print(f"🔀 Mode 2-0 (CUDA INT8 with FP32 input):")
+        print(f"    u dtype: torch.float32")
+        print(f"    u first 5 values: {x_mode20_fp32[0, 0, :5].tolist()}")
+        print(f"")
+
+        print(f"🔀 Mode 2-1 (PyTorch INT8 direct):")
+        print(f"    u dtype: torch.int8")
+        print(f"    u first 5 values: {x_mode21_int8[0, 0, :5].tolist()}")
+        print(f"    u first 5 (dequantized for ref): {(x_mode21_int8.float() * output_scale)[0, 0, :5].tolist()}")
+        print(f"")
+
+        # Run BOTH SSM kernels and compare outputs
+        print(f"🚀 Running BOTH SSM kernels for ALL 100 samples...")
+
+    # Save original environment
+    original_env = {
+        'SSM_USE_PYTORCH_INT8': os.environ.get('SSM_USE_PYTORCH_INT8', 'false'),
+        'SSM_USE_CUDA_FOR_FP32': os.environ.get('SSM_USE_CUDA_FOR_FP32', 'false'),
+        'DUAL_MODE_DEBUG': 'true'
+    }
+
+    # Temporarily disable debug mode to avoid infinite recursion
+    os.environ['DUAL_MODE_DEBUG'] = 'false'
+
+    try:
+        # Run Mode 2-0: CUDA INT8 SSM with FP32 input
+        os.environ['SSM_USE_PYTORCH_INT8'] = 'false'
+        os.environ['SSM_USE_CUDA_FOR_FP32'] = 'true'
+        y_ssm_mode20 = layer_self.selective_scan.forward(x_mode20_fp32, dt, B, C, z=z, return_last_state=False)
+
+        # Run Mode 2-1: PyTorch INT8 SSM with INT8 input
+        os.environ['SSM_USE_PYTORCH_INT8'] = 'true'
+        os.environ['SSM_USE_CUDA_FOR_FP32'] = 'false'
+        y_ssm_mode21 = layer_self.selective_scan.forward(x_mode21_int8, dt, B, C, z=z, return_last_state=False)
+
+        # Continue through had + out_proj to get final layer output
+        y_had_mode20 = layer_self.had(y_ssm_mode20)
+        y_had_mode21 = layer_self.had(y_ssm_mode21)
+
+        out_mode20 = layer_self.out_proj(y_had_mode20)
+        out_mode21 = layer_self.out_proj(y_had_mode21)
+
+        # Compute SSM output difference
+        diff_ssm = (y_ssm_mode20.float() - y_ssm_mode21.float()).abs()
+        mean_diff_ssm = diff_ssm.mean().item()
+        max_diff_ssm = diff_ssm.max().item()
+
+        # Compute final layer output difference
+        diff_out = (out_mode20.float() - out_mode21.float()).abs()
+        mean_diff_out = diff_out.mean().item()
+        max_diff_out = diff_out.max().item()
+
+        # Accumulate statistics
+        _dual_mode_stats['sample_count'] += 1
+        _dual_mode_stats['total_mean_diff'] += mean_diff_ssm
+        _dual_mode_stats['total_max_diff'] = max(max_diff_ssm, _dual_mode_stats['total_max_diff'])
+        _dual_mode_stats['all_diffs'].append(mean_diff_ssm)
+
+        # Also track layer output differences
+        if 'total_mean_diff_out' not in _dual_mode_stats:
+            _dual_mode_stats['total_mean_diff_out'] = 0.0
+            _dual_mode_stats['total_max_diff_out'] = 0.0
+            _dual_mode_stats['all_diffs_out'] = []
+
+        _dual_mode_stats['total_mean_diff_out'] += mean_diff_out
+        _dual_mode_stats['total_max_diff_out'] = max(max_diff_out, _dual_mode_stats['total_max_diff_out'])
+        _dual_mode_stats['all_diffs_out'].append(mean_diff_out)
+
+        # Print details for first sample only
+        if _dual_mode_stats['sample_count'] == 1:
+            print(f"")
+            print(f"📈 SSM Output Comparison (Sample 1):")
+            print(f"    Mode 2-0 first 5 values [0,0,:5]: {y_ssm_mode20[0, 0, :5].tolist()}")
+            print(f"    Mode 2-1 first 5 values [0,0,:5]: {y_ssm_mode21[0, 0, :5].tolist()}")
+            print(f"    Mean absolute diff: {mean_diff_ssm:.6f}")
+            print(f"    Max absolute diff: {max_diff_ssm:.6f}")
+            print(f"")
+            print(f"📈 After Hadamard (Sample 1):")
+            print(f"    Mode 2-0 had output [0,0,:5]: {y_had_mode20[0, 0, :5].tolist()}")
+            print(f"    Mode 2-1 had output [0,0,:5]: {y_had_mode21[0, 0, :5].tolist()}")
+            print(f"")
+            print(f"📈 Final Layer Output (Sample 1):")
+            print(f"    Mode 2-0 first 5 values [0,0,:5]: {out_mode20[0, 0, :5].tolist()}")
+            print(f"    Mode 2-1 first 5 values [0,0,:5]: {out_mode21[0, 0, :5].tolist()}")
+            print(f"    Mean absolute diff: {mean_diff_out:.6f}")
+            print(f"    Max absolute diff: {max_diff_out:.6f}")
+            print(f"")
+            print(f"⏳ Continuing to compare remaining samples (progress shown by lm_eval)...")
+            print(f"{'='*80}\n")
+
+        # Print summary after all samples
+        if _dual_mode_stats['sample_count'] == 100:
+            avg_mean_diff_ssm = _dual_mode_stats['total_mean_diff'] / 100
+            avg_mean_diff_out = _dual_mode_stats['total_mean_diff_out'] / 100
+            print(f"\n{'='*80}")
+            print(f"📊 DUAL MODE COMPARISON - FINAL SUMMARY (100 samples)")
+            print(f"{'='*80}")
+            print(f"")
+            print(f"🔹 SSM Output Differences:")
+            print(f"  Average mean absolute diff: {avg_mean_diff_ssm:.6f}")
+            print(f"  Maximum absolute diff: {_dual_mode_stats['total_max_diff']:.6f}")
+            import statistics
+            print(f"  Min: {min(_dual_mode_stats['all_diffs']):.6f}")
+            print(f"  Max: {max(_dual_mode_stats['all_diffs']):.6f}")
+            print(f"  Median: {statistics.median(_dual_mode_stats['all_diffs']):.6f}")
+            print(f"")
+            print(f"🔹 Final Layer Output Differences (after had + out_proj):")
+            print(f"  Average mean absolute diff: {avg_mean_diff_out:.6f}")
+            print(f"  Maximum absolute diff: {_dual_mode_stats['total_max_diff_out']:.6f}")
+            print(f"  Min: {min(_dual_mode_stats['all_diffs_out']):.6f}")
+            print(f"  Max: {max(_dual_mode_stats['all_diffs_out']):.6f}")
+            print(f"  Median: {statistics.median(_dual_mode_stats['all_diffs_out']):.6f}")
+            print(f"")
+            if avg_mean_diff_out < 0.001:
+                print(f"✅ Mode 2-0 and Mode 2-1 produce nearly IDENTICAL layer outputs!")
+                print(f"   Difference < 0.001 is within floating-point precision.")
+            else:
+                print(f"⚠️  Mode 2-0 and Mode 2-1 have measurable differences in layer outputs.")
+                print(f"   This could lead to different final predictions.")
+            print(f"{'='*80}\n")
+
+    finally:
+        # Restore original environment
+        for key, value in original_env.items():
+            os.environ[key] = value
+
+    def forward_mode5(self, hidden_states, inference_params=None):
+        """
+        Mode 5: Dual-path forward
+        - Mode 0 path: Normal INT8 quantization
+        - Mode 5 path: Conv1D outputs FP32, SSM receives FP32
+        - Both paths start from the SAME initial quantized input
+        - Compare outputs at each layer (layers 0, 1, 2, 23)
+        """
+        import quant_causal_conv1d_cuda
+        import quant_sscan_cuda
+        
+        batch, seqlen, dim = hidden_states.shape
+        
+        # === Step 1: in_proj (shared by both paths) ===
+        xz = self.in_proj.to_seqlen_last(hidden_states)  # (B, D, L) INT8
+        x_int8, z = xz.chunk(2, dim=1)
+        
+        # === Step 2a: Mode 0 Conv1D (INT8 → INT8) ===
+        x_mode0 = quant_causal_conv1d_cuda.fwd(
+            x_int8, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.output_scale, self.conv1d.bias_scale,
+            self.conv1d.bias, None, None, None, True
+        )  # INT8
+        
+        # === Step 2b: Mode 5 Conv1D (INT8 → FP32) ===
+        x_mode5_fp32 = quant_causal_conv1d_cuda.fwd_mode5(
+            x_int8, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.bias_scale, self.conv1d.bias, True
+        )  # FP32
+        
+        # === Step 3a: Mode 0 SSM (INT8 input) ===
+        x_mode0_reshape = rearrange(x_mode0, "b d l -> b l d").contiguous()
+        x_dbl_mode0 = self.x_proj(x_mode0_reshape)
+        dt_mode0, B_mode0, C_mode0 = torch.split(x_dbl_mode0, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_mode0 = self.dt_proj.to_seqlen_last(dt_mode0.contiguous())
+        B_mode0 = rearrange(B_mode0, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        C_mode0 = rearrange(C_mode0, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        
+        y_mode0 = self.selective_scan.forward(x_mode0, dt_mode0, B_mode0, C_mode0, z=z, return_last_state=False)
+        
+        # === Step 3b: Mode 5 SSM (FP32 input) ===
+        # Requantize FP32 to INT8 for x_proj
+        x_mode5_int8_for_xproj = torch.round(x_mode5_fp32 / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+        x_mode5_reshape = rearrange(x_mode5_int8_for_xproj, "b d l -> b l d").contiguous()
+        x_dbl_mode5 = self.x_proj(x_mode5_reshape)
+        dt_mode5, B_mode5, C_mode5 = torch.split(x_dbl_mode5, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_mode5 = self.dt_proj.to_seqlen_last(dt_mode5.contiguous())
+        B_mode5 = rearrange(B_mode5, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        C_mode5 = rearrange(C_mode5, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        
+        # Call Mode 5 SSM kernel (FP32 input)
+        y_mode5, _ = quant_sscan_cuda.fwd_mode5(
+            x_mode5_fp32,  # FP32 input
+            dt_mode5, self.selective_scan.dt_scale,
+            self.selective_scan.A, self.selective_scan.A_scale,
+            B_mode5, self.selective_scan.B_scale,
+            C_mode5, self.selective_scan.C_scale,
+            self.selective_scan.ssm_state_scale,
+            self.selective_scan.D, self.selective_scan.D_scale,
+            z, self.selective_scan.z_scale,
+            self.selective_scan.dt_bias, self.selective_scan.dt_bias_scale,
+            True  # delta_softplus
+        )
+        
+        # === Step 4: Compare outputs (for layers 0, 1, 2, 23) ===
+        if self.layer_idx in [0, 1, 2, 23]:
+            y_mode0_fp16 = y_mode0.half() if y_mode0.dtype != torch.float16 else y_mode0
+            y_mode5_fp16 = y_mode5.half() if y_mode5.dtype != torch.float16 else y_mode5
+            
+            # Sample 3 values
+            sample_indices = [0, y_mode0_fp16.numel() // 2, y_mode0_fp16.numel() - 1]
+            y_mode0_flat = y_mode0_fp16.flatten()
+            y_mode5_flat = y_mode5_fp16.flatten()
+            
+            # Statistics
+            diff = (y_mode0_flat.float() - y_mode5_flat.float()).abs()
+            
+            print(f"\n{'='*80}")
+            print(f"[Mode 5 Dual-Path] Layer {self.layer_idx} SSM Output Comparison")
+            print(f"{'='*80}")
+            print(f"Sample values (3 positions):")
+            for idx in sample_indices:
+                print(f"  [{idx}] Mode 0: {y_mode0_flat[idx].item():.6f}, Mode 5: {y_mode5_flat[idx].item():.6f}, Diff: {diff[idx].item():.6f}")
+            print(f"Statistics:")
+            print(f"  Mean: Mode 0={y_mode0_flat.float().mean().item():.6f}, Mode 5={y_mode5_flat.float().mean().item():.6f}")
+            print(f"  Std:  Mode 0={y_mode0_flat.float().std().item():.6f}, Mode 5={y_mode5_flat.float().std().item():.6f}")
+            print(f"  Min:  Mode 0={y_mode0_flat.min().item():.6f}, Mode 5={y_mode5_flat.min().item():.6f}")
+            print(f"  Max:  Mode 0={y_mode0_flat.max().item():.6f}, Mode 5={y_mode5_flat.max().item():.6f}")
+            print(f"Difference Statistics:")
+            print(f"  Mean Abs Diff: {diff.mean().item():.6f}")
+            print(f"  Max Abs Diff:  {diff.max().item():.6f}")
+            print(f"{'='*80}\n")
+        
+        # === Step 5: Continue with Mode 5 output ===
+        y_mode5_for_output = y_mode5.half() if y_mode5.dtype != torch.float16 else y_mode5
+        y = self.had(y_mode5_for_output)
+        out = self.out_proj(y)
+        
+        return out
+
+    def forward_mode6(self, hidden_states, inference_params=None):
+        """
+        Mode 6: Dual-path forward
+        - Mode 0 path: Takes quantized Mode 6 Conv FP32 output as input
+        - Mode 6 path: Conv1D outputs FP32, SSM receives FP32
+        - Mode 6 output feeds BOTH paths (quantized for Mode 0, FP32 for Mode 6)
+        - Compare outputs at each layer (layers 0, 1, 2, 23)
+        """
+        import quant_causal_conv1d_cuda
+        import quant_sscan_cuda
+        
+        batch, seqlen, dim = hidden_states.shape
+        
+        # === Step 1: in_proj (shared by both paths) ===
+        xz = self.in_proj.to_seqlen_last(hidden_states)  # (B, D, L) INT8
+        x_int8, z = xz.chunk(2, dim=1)
+        
+        # === Step 2: Mode 6 Conv1D (INT8 → FP32) ===
+        x_mode6_fp32 = quant_causal_conv1d_cuda.fwd_mode6(
+            x_int8, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.bias_scale, self.conv1d.bias, True
+        )  # FP32
+        
+        # === Step 3a: Mode 0 Conv1D (quantize Mode 6 output → INT8 → INT8) ===
+        x_mode6_int8 = torch.round(x_mode6_fp32 / self.conv1d.input_scale).clamp(-128, 127).to(torch.int8)
+        x_mode0 = quant_causal_conv1d_cuda.fwd(
+            x_mode6_int8, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.output_scale, self.conv1d.bias_scale,
+            self.conv1d.bias, None, None, None, True
+        )  # INT8
+        
+        # === Step 4a: Mode 0 SSM (INT8 input) ===
+        x_mode0_reshape = rearrange(x_mode0, "b d l -> b l d").contiguous()
+        x_dbl_mode0 = self.x_proj(x_mode0_reshape)
+        dt_mode0, B_mode0, C_mode0 = torch.split(x_dbl_mode0, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_mode0 = self.dt_proj.to_seqlen_last(dt_mode0.contiguous())
+        B_mode0 = rearrange(B_mode0, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        C_mode0 = rearrange(C_mode0, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        
+        y_mode0 = self.selective_scan.forward(x_mode0, dt_mode0, B_mode0, C_mode0, z=z, return_last_state=False)
+        
+        # === Step 4b: Mode 6 SSM (FP32 input) ===
+        # Requantize FP32 to INT8 for x_proj
+        x_mode6_int8_for_xproj = torch.round(x_mode6_fp32 / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+        x_mode6_reshape = rearrange(x_mode6_int8_for_xproj, "b d l -> b l d").contiguous()
+        x_dbl_mode6 = self.x_proj(x_mode6_reshape)
+        dt_mode6, B_mode6, C_mode6 = torch.split(x_dbl_mode6, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_mode6 = self.dt_proj.to_seqlen_last(dt_mode6.contiguous())
+        B_mode6 = rearrange(B_mode6, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        C_mode6 = rearrange(C_mode6, "b l dstate -> b dstate l", l=seqlen).contiguous()
+        
+        # Call Mode 6 SSM kernel (FP32 input)
+        y_mode6, _ = quant_sscan_cuda.fwd_mode6(
+            x_mode6_fp32,  # FP32 input
+            dt_mode6, self.selective_scan.dt_scale,
+            self.selective_scan.A, self.selective_scan.A_scale,
+            B_mode6, self.selective_scan.B_scale,
+            C_mode6, self.selective_scan.C_scale,
+            self.selective_scan.ssm_state_scale,
+            self.selective_scan.D, self.selective_scan.D_scale,
+            z, self.selective_scan.z_scale,
+            self.selective_scan.dt_bias, self.selective_scan.dt_bias_scale,
+            True  # delta_softplus
+        )
+        
+        # === Step 5: Compare outputs (for layers 0, 1, 2, 23) ===
+        if self.layer_idx in [0, 1, 2, 23]:
+            y_mode0_fp16 = y_mode0.half() if y_mode0.dtype != torch.float16 else y_mode0
+            y_mode6_fp16 = y_mode6.half() if y_mode6.dtype != torch.float16 else y_mode6
+            
+            # Sample 3 values
+            sample_indices = [0, y_mode0_fp16.numel() // 2, y_mode0_fp16.numel() - 1]
+            y_mode0_flat = y_mode0_fp16.flatten()
+            y_mode6_flat = y_mode6_fp16.flatten()
+            
+            # Statistics
+            diff = (y_mode0_flat.float() - y_mode6_flat.float()).abs()
+            
+            print(f"\n{'='*80}")
+            print(f"[Mode 6 Dual-Path] Layer {self.layer_idx} SSM Output Comparison")
+            print(f"{'='*80}")
+            print(f"Sample values (3 positions):")
+            for idx in sample_indices:
+                print(f"  [{idx}] Mode 0: {y_mode0_flat[idx].item():.6f}, Mode 6: {y_mode6_flat[idx].item():.6f}, Diff: {diff[idx].item():.6f}")
+            print(f"Statistics:")
+            print(f"  Mean: Mode 0={y_mode0_flat.float().mean().item():.6f}, Mode 6={y_mode6_flat.float().mean().item():.6f}")
+            print(f"  Std:  Mode 0={y_mode0_flat.float().std().item():.6f}, Mode 6={y_mode6_flat.float().std().item():.6f}")
+            print(f"  Min:  Mode 0={y_mode0_flat.min().item():.6f}, Mode 6={y_mode6_flat.min().item():.6f}")
+            print(f"  Max:  Mode 0={y_mode0_flat.max().item():.6f}, Mode 6={y_mode6_flat.max().item():.6f}")
+            print(f"Difference Statistics:")
+            print(f"  Mean Abs Diff: {diff.mean().item():.6f}")
+            print(f"  Max Abs Diff:  {diff.max().item():.6f}")
+            print(f"{'='*80}\n")
+        
+        # === Step 6: Continue with Mode 6 output ===
+        y_mode6_for_output = y_mode6.half() if y_mode6.dtype != torch.float16 else y_mode6
+        y = self.had(y_mode6_for_output)
+        out = self.out_proj(y)
+        
+        return out

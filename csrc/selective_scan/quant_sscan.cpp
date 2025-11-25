@@ -17,6 +17,14 @@ https://github.com/state-spaces/mamba
 template<typename input_t, typename weight_t>
 void quant_sscan_fwd_cuda(QuantSSMParams &params, cudaStream_t stream);
 
+// Mode 5: FP32 input u
+template<typename input_t, typename weight_t>
+void quant_sscan_fwd_cuda_mode5(QuantSSMParams &params, cudaStream_t stream);
+
+// Mode 6: FP32 input u (same as Mode 5, for dual-path comparison)
+template<typename input_t, typename weight_t>
+void quant_sscan_fwd_cuda_mode6(QuantSSMParams &params, cudaStream_t stream);
+
 // this is exactly the same with set_ssm_params_fwd, should combine
 void set_quant_ssm_params_fwd(QuantSSMParams &params,
                         // sizes
@@ -265,6 +273,288 @@ quant_sscan_fwd(const at::Tensor &u, const at::Tensor &scale_u,
 }
 
 
+// Mode 5: FP32 input u (from Conv1D FP32 output)
+std::vector<at::Tensor>
+quant_sscan_fwd_mode5(const at::Tensor &u, // Mode 5: FP32 input
+                const at::Tensor &delta, const at::Tensor &scale_delta,
+                const at::Tensor &A, const at::Tensor &scale_A,
+                const at::Tensor &B, const at::Tensor &scale_B,
+                const at::Tensor &C, const at::Tensor &scale_C,
+                const at::Tensor &scale_ssm_state,
+                const c10::optional<at::Tensor> &D_, const c10::optional<at::Tensor> &scale_D_,
+                const c10::optional<at::Tensor> &z_, const c10::optional<at::Tensor> &scale_z_,
+                const c10::optional<at::Tensor> &delta_bias_, const c10::optional<at::Tensor> &scale_delta_bias_,
+                bool delta_softplus) {
+    // Mode 5: u is FP32, so input_type check is different
+    auto input_type = delta.scalar_type(); // Use delta's type for input_t
+    auto weight_type = A.scalar_type();
+    TORCH_CHECK(u.scalar_type() == at::ScalarType::Float); // Mode 5: u is FP32
+    TORCH_CHECK(input_type == at::ScalarType::Char);
+    TORCH_CHECK(scale_A.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(weight_type == at::ScalarType::Char);
+
+    const bool is_variable_B = B.dim() >= 3;
+    const bool is_variable_C = C.dim() >= 3;
+
+    TORCH_CHECK(delta.scalar_type() == input_type);
+    TORCH_CHECK(scale_delta.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(B.scalar_type() == (!is_variable_B ? weight_type : input_type));
+    TORCH_CHECK(scale_B.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(C.scalar_type() == (!is_variable_C ? weight_type : input_type));
+    TORCH_CHECK(scale_C.scalar_type() == at::ScalarType::Float);
+
+    TORCH_CHECK(u.is_cuda());
+    TORCH_CHECK(delta.is_cuda());
+    TORCH_CHECK(A.is_cuda());
+    TORCH_CHECK(B.is_cuda());
+    TORCH_CHECK(C.is_cuda());
+
+    TORCH_CHECK(u.stride(-1) == 1 || u.size(-1) == 1);
+    TORCH_CHECK(delta.stride(-1) == 1 || delta.size(-1) == 1);
+
+    const auto sizes = u.sizes();
+    const int batch_size = sizes[0];
+    const int dim = sizes[1];
+    const int seqlen = sizes[2];
+    const int dstate = A.size(1);
+    const int n_groups = is_variable_B ? B.size(1) : 1;
+
+    TORCH_CHECK(dstate <= 256, "quant_sscan only supports state dimension <= 256");
+
+    CHECK_SHAPE(u, batch_size, dim, seqlen);
+    // Mode 5: No scale_u needed
+    CHECK_SHAPE(delta, batch_size, dim, seqlen);
+    CHECK_SHAPE(scale_delta, 1);
+    CHECK_SHAPE(A, dim, dstate);
+    CHECK_SHAPE(scale_A, 1);
+    if (!is_variable_B) {
+        throw std::logic_error("Must be input-dependent B and C");
+        CHECK_SHAPE(B, dim, dstate);
+    } else {
+        CHECK_SHAPE(B, batch_size, n_groups, dstate, seqlen);
+        TORCH_CHECK(B.stride(-1) == 1 || B.size(-1) == 1);
+    }
+    CHECK_SHAPE(scale_B, 1);
+
+    if (!is_variable_C) {
+        throw std::logic_error("Must be input-dependent B and C");
+        CHECK_SHAPE(C, dim, dstate);
+    } else {
+        CHECK_SHAPE(C, batch_size, n_groups, dstate, seqlen);
+        TORCH_CHECK(C.stride(-1) == 1 || C.size(-1) == 1);
+    }
+    CHECK_SHAPE(scale_C, 1);
+
+    TORCH_CHECK(scale_ssm_state.scalar_type() == at::ScalarType::Float);
+    CHECK_SHAPE(scale_ssm_state, 1);
+
+    if (D_.has_value()) {
+        auto D = D_.value();
+        TORCH_CHECK(D.scalar_type() == weight_type);
+        auto scale_D = scale_D_.value();
+        TORCH_CHECK(scale_D.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(D.is_cuda());
+        TORCH_CHECK(D.stride(-1) == 1 || D.size(-1) == 1);
+        CHECK_SHAPE(D, dim);
+        CHECK_SHAPE(scale_D, 1);
+    }
+
+    if (delta_bias_.has_value()) {
+        auto delta_bias = delta_bias_.value();
+        TORCH_CHECK(delta_bias.scalar_type() == weight_type);
+        auto scale_delta_bias = scale_delta_bias_.value();
+        TORCH_CHECK(scale_delta_bias.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(delta_bias.is_cuda());
+        TORCH_CHECK(delta_bias.stride(-1) == 1 || delta_bias.size(-1) == 1);
+        CHECK_SHAPE(delta_bias, dim);
+        CHECK_SHAPE(scale_delta_bias, 1);
+    }
+
+    at::Tensor z, scale_z;
+    const bool has_z = z_.has_value();
+    if (has_z) {
+        z = z_.value();
+        TORCH_CHECK(z.scalar_type() == input_type);
+        scale_z = scale_z_.value();
+        TORCH_CHECK(scale_z.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(z.is_cuda());
+        TORCH_CHECK(z.stride(-1) == 1 || z.size(-1) == 1);
+        CHECK_SHAPE(z, batch_size, dim, seqlen);
+        CHECK_SHAPE(scale_z, 1);
+    }
+
+    const int n_chunks = (seqlen + 2048 - 1) / 2048;
+    at::Tensor out = torch::empty({batch_size, dim, seqlen}, delta.options().dtype(at::ScalarType::Half));
+    at::Tensor x = torch::empty({batch_size, dim, n_chunks, dstate}, delta.options().dtype(at::ScalarType::Char));
+
+    // Mode 5: Create a dummy scale_u tensor (not used in kernel)
+    at::Tensor scale_u_dummy = torch::ones({1}, torch::dtype(torch::kFloat32).device(u.device()));
+
+    QuantSSMParams params;
+    set_quant_ssm_params_fwd(params, batch_size, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
+                       u, scale_u_dummy, delta, scale_delta, A, scale_A, B, scale_B, C, scale_C, scale_ssm_state, out, z, scale_z,
+                       D_.has_value() ? D_.value().data_ptr() : nullptr,
+                       scale_D_.has_value() ? scale_D_.value().data_ptr() : nullptr,
+                       delta_bias_.has_value() ? delta_bias_.value().data_ptr() : nullptr,
+                       scale_delta_bias_.has_value() ? scale_delta_bias_.value().data_ptr() : nullptr,
+                       x.data_ptr(), has_z, delta_softplus);
+
+    // Otherwise the kernel will be launched from cuda:0 device
+    at::cuda::CUDAGuard device_guard{(char)u.get_device()};
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    DISPATCH_ITYPE_INTEGRAL(delta.scalar_type(), "quant_sscan_fwd_mode5", [&] {
+        DISPATCH_WTYPE_INTEGRAL(A.scalar_type(), "quant_sscan_fwd_mode5", [&] {
+            quant_sscan_fwd_cuda_mode5<input_t, weight_t>(params, stream);
+        });
+    });
+
+    auto out_T = out.transpose(1, 2).contiguous();
+    std::vector<at::Tensor> result = {out_T, x};
+    return result;
+}
+
+std::vector<at::Tensor>
+quant_sscan_fwd_mode6(const at::Tensor &u, // Mode 6: FP32 input
+                const at::Tensor &delta, const at::Tensor &scale_delta,
+                const at::Tensor &A, const at::Tensor &scale_A,
+                const at::Tensor &B, const at::Tensor &scale_B,
+                const at::Tensor &C, const at::Tensor &scale_C,
+                const at::Tensor &scale_ssm_state,
+                const c10::optional<at::Tensor> &D_, const c10::optional<at::Tensor> &scale_D_,
+                const c10::optional<at::Tensor> &z_, const c10::optional<at::Tensor> &scale_z_,
+                const c10::optional<at::Tensor> &delta_bias_, const c10::optional<at::Tensor> &scale_delta_bias_,
+                bool delta_softplus) {
+    // Mode 6: u is FP32, so input_type check is different
+    auto input_type = delta.scalar_type(); // Use delta's type for input_t
+    auto weight_type = A.scalar_type();
+    TORCH_CHECK(u.scalar_type() == at::ScalarType::Float); // Mode 6: u is FP32
+    TORCH_CHECK(input_type == at::ScalarType::Char);
+    TORCH_CHECK(scale_A.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(weight_type == at::ScalarType::Char);
+
+    const bool is_variable_B = B.dim() >= 3;
+    const bool is_variable_C = C.dim() >= 3;
+
+    TORCH_CHECK(delta.scalar_type() == input_type);
+    TORCH_CHECK(scale_delta.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(B.scalar_type() == (!is_variable_B ? weight_type : input_type));
+    TORCH_CHECK(scale_B.scalar_type() == at::ScalarType::Float);
+    TORCH_CHECK(C.scalar_type() == (!is_variable_C ? weight_type : input_type));
+    TORCH_CHECK(scale_C.scalar_type() == at::ScalarType::Float);
+
+    TORCH_CHECK(u.is_cuda());
+    TORCH_CHECK(delta.is_cuda());
+    TORCH_CHECK(A.is_cuda());
+    TORCH_CHECK(B.is_cuda());
+    TORCH_CHECK(C.is_cuda());
+
+    TORCH_CHECK(u.stride(-1) == 1 || u.size(-1) == 1);
+    TORCH_CHECK(delta.stride(-1) == 1 || delta.size(-1) == 1);
+
+    const auto sizes = u.sizes();
+    const int batch_size = sizes[0];
+    const int dim = sizes[1];
+    const int seqlen = sizes[2];
+    const int dstate = A.size(1);
+    const int n_groups = is_variable_B ? B.size(1) : 1;
+
+    TORCH_CHECK(dstate <= 256, "quant_sscan only supports state dimension <= 256");
+
+    CHECK_SHAPE(u, batch_size, dim, seqlen);
+    // Mode 6: No scale_u needed
+    CHECK_SHAPE(delta, batch_size, dim, seqlen);
+    CHECK_SHAPE(scale_delta, 1);
+    CHECK_SHAPE(A, dim, dstate);
+    CHECK_SHAPE(scale_A, 1);
+    if (!is_variable_B) {
+        throw std::logic_error("Must be input-dependent B and C");
+        CHECK_SHAPE(B, dim, dstate);
+    } else {
+        CHECK_SHAPE(B, batch_size, n_groups, dstate, seqlen);
+        TORCH_CHECK(B.stride(-1) == 1 || B.size(-1) == 1);
+    }
+    CHECK_SHAPE(scale_B, 1);
+
+    if (!is_variable_C) {
+        throw std::logic_error("Must be input-dependent B and C");
+        CHECK_SHAPE(C, dim, dstate);
+    } else {
+        CHECK_SHAPE(C, batch_size, n_groups, dstate, seqlen);
+        TORCH_CHECK(C.stride(-1) == 1 || C.size(-1) == 1);
+    }
+    CHECK_SHAPE(scale_C, 1);
+
+    TORCH_CHECK(scale_ssm_state.scalar_type() == at::ScalarType::Float);
+    CHECK_SHAPE(scale_ssm_state, 1);
+
+    if (D_.has_value()) {
+        auto D = D_.value();
+        TORCH_CHECK(D.scalar_type() == weight_type);
+        auto scale_D = scale_D_.value();
+        TORCH_CHECK(scale_D.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(D.is_cuda());
+        TORCH_CHECK(D.stride(-1) == 1 || D.size(-1) == 1);
+        CHECK_SHAPE(D, dim);
+        CHECK_SHAPE(scale_D, 1);
+    }
+
+    if (delta_bias_.has_value()) {
+        auto delta_bias = delta_bias_.value();
+        TORCH_CHECK(delta_bias.scalar_type() == weight_type);
+        auto scale_delta_bias = scale_delta_bias_.value();
+        TORCH_CHECK(scale_delta_bias.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(delta_bias.is_cuda());
+        TORCH_CHECK(delta_bias.stride(-1) == 1 || delta_bias.size(-1) == 1);
+        CHECK_SHAPE(delta_bias, dim);
+        CHECK_SHAPE(scale_delta_bias, 1);
+    }
+
+    at::Tensor z, scale_z;
+    const bool has_z = z_.has_value();
+    if (has_z) {
+        z = z_.value();
+        TORCH_CHECK(z.scalar_type() == input_type);
+        scale_z = scale_z_.value();
+        TORCH_CHECK(scale_z.scalar_type() == at::ScalarType::Float);
+        TORCH_CHECK(z.is_cuda());
+        TORCH_CHECK(z.stride(-1) == 1 || z.size(-1) == 1);
+        CHECK_SHAPE(z, batch_size, dim, seqlen);
+        CHECK_SHAPE(scale_z, 1);
+    }
+
+    const int n_chunks = (seqlen + 2048 - 1) / 2048;
+    at::Tensor out = torch::empty({batch_size, dim, seqlen}, delta.options().dtype(at::ScalarType::Half));
+    at::Tensor x = torch::empty({batch_size, dim, n_chunks, dstate}, delta.options().dtype(at::ScalarType::Char));
+
+    // Mode 6: Create a dummy scale_u tensor (not used in kernel)
+    at::Tensor scale_u_dummy = torch::ones({1}, torch::dtype(torch::kFloat32).device(u.device()));
+
+    QuantSSMParams params;
+    set_quant_ssm_params_fwd(params, batch_size, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
+                       u, scale_u_dummy, delta, scale_delta, A, scale_A, B, scale_B, C, scale_C, scale_ssm_state, out, z, scale_z,
+                       D_.has_value() ? D_.value().data_ptr() : nullptr,
+                       scale_D_.has_value() ? scale_D_.value().data_ptr() : nullptr,
+                       delta_bias_.has_value() ? delta_bias_.value().data_ptr() : nullptr,
+                       scale_delta_bias_.has_value() ? scale_delta_bias_.value().data_ptr() : nullptr,
+                       x.data_ptr(), has_z, delta_softplus);
+
+    // Otherwise the kernel will be launched from cuda:0 device
+    at::cuda::CUDAGuard device_guard{(char)u.get_device()};
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    DISPATCH_ITYPE_INTEGRAL(delta.scalar_type(), "quant_sscan_fwd_mode6", [&] {
+        DISPATCH_WTYPE_INTEGRAL(A.scalar_type(), "quant_sscan_fwd_mode6", [&] {
+            quant_sscan_fwd_cuda_mode6<input_t, weight_t>(params, stream);
+        });
+    });
+
+    auto out_T = out.transpose(1, 2).contiguous();
+    std::vector<at::Tensor> result = {out_T, x};
+    return result;
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fwd", &quant_sscan_fwd, "Quantized selective scan forward");
+    m.def("fwd_mode5", &quant_sscan_fwd_mode5, "Quantized selective scan forward Mode 5 (FP32 input u)");
+    m.def("fwd_mode6", &quant_sscan_fwd_mode6, "Quantized selective scan forward Mode 6 (FP32 input u, dual-path comparison)");
 }

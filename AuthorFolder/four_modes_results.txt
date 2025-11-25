@@ -1,0 +1,54 @@
+================================================================================
+Four-Mode Comparison Test Results
+================================================================================
+Date: Fri Nov  7 13:06:47 UTC 2025
+Model: quamba-130m-w8a8
+Task: lambada_openai
+Test mode: quick (100 samples)
+================================================================================
+
+1. Baseline (INT8 CUDA kernel)
+   - Description: Original Quamba INT8 implementation with CUDA kernel
+   - Accuracy: 0.38
+   - Time: 27s
+   - Purpose: Reference baseline for comparison
+
+2. Mode 2 (Float Sim INT8 - Verification)
+   - Description: PyTorch simulation of INT8 quantization behavior
+   - Accuracy: 0.37
+   - Time: 29s
+   - Diff from baseline: 0.010000
+   - Purpose: Verify PyTorch simulation matches CUDA implementation
+   - Expected: Should be identical to baseline (diff ≈ 0)
+
+3. Mode 1 (FP32 SSM Input - Upper Bound)
+   - Description: SSM input kept in FP32 without quantization
+   - Accuracy: 0.37
+   - Time: 28s
+   - Improvement over baseline: +-0.010000 (+-2.63%)
+   - Purpose: Theoretical upper bound of precision improvement
+   - Expected: Should be better than baseline
+
+4. Mode 3 (Scale Enhancement - Research)
+   - Description: Dual-scale quantization (scale1 for inliers, scale2 for outliers)
+   - Scale factor: 2025.0
+   - Accuracy: 0.19
+   - Time: 30s
+   - Improvement over baseline: +-0.190000 (+-50.00%)
+   - Purpose: Research approach for handling outliers
+   - Expected: Should be between baseline and Mode 1
+
+================================================================================
+SUMMARY
+================================================================================
+
+Baseline (INT8):           0.38
+Mode 2 (Verification):     0.37  (diff: -0.190000)
+Mode 1 (FP32 Upper Bound): 0.37
+Mode 3 (Scale Enhancement):0.19
+
+Key Findings:
+- Mode 2 should match baseline exactly (verification of implementation)
+- Mode 1 shows theoretical upper bound of precision improvement
+- Mode 3 explores dual-scale quantization approach
+

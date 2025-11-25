@@ -192,14 +192,41 @@ def run_quamba_calibration(
 
     device = next(model.parameters()).device
     if calibration_dataset is None:
-        logger.info("Calibrate with monology/pile-uncopyrighted")
-        calibration_dataset = load_dataset("monology/pile-uncopyrighted", data_files="val.jsonl.zst", split="train")
+        # Try to load cached calibration data for reproducibility
+        import pickle
+        calib_cache_file = "calibration_cache.pkl"
 
-        def preprocess(data, tokenizer, max_tokens, device):
-            input_ids = tokenizer(data["text"], return_tensors="pt",
-                    max_length=max_tokens, truncation=True).input_ids.to(device)
-            return input_ids
-        preprocess_fn = partial(preprocess, tokenizer=tokenizer, max_tokens=seq_len, device=device)
+        if os.path.exists(calib_cache_file):
+            logger.info(f"Loading cached calibration data from {calib_cache_file}")
+            with open(calib_cache_file, 'rb') as f:
+                cached_data = pickle.load(f)
+                calibration_dataset = cached_data['texts']
+                logger.info(f"Loaded {len(calibration_dataset)} cached samples")
+
+            def preprocess(text, tokenizer, max_tokens, device):
+                input_ids = tokenizer(text, return_tensors="pt",
+                        max_length=max_tokens, truncation=True).input_ids.to(device)
+                return input_ids
+            preprocess_fn = partial(preprocess, tokenizer=tokenizer, max_tokens=seq_len, device=device)
+        else:
+            logger.info("Calibrate with monology/pile-uncopyrighted")
+            calibration_dataset = load_dataset("monology/pile-uncopyrighted", data_files="val.jsonl.zst", split="train")
+            calibration_dataset = calibration_dataset.shuffle(seed=42)  # 固定随机种子，确保可重复性
+
+            # Cache the calibration data for future runs
+            logger.info(f"Caching first {num_samples} samples to {calib_cache_file} for reproducibility...")
+            texts_to_cache = [calibration_dataset[i]["text"] for i in range(num_samples)]
+            with open(calib_cache_file, 'wb') as f:
+                pickle.dump({'texts': texts_to_cache, 'num_samples': num_samples}, f)
+            logger.info(f"Calibration data cached successfully")
+
+            calibration_dataset = texts_to_cache  # Use cached texts directly
+
+            def preprocess(text, tokenizer, max_tokens, device):
+                input_ids = tokenizer(text, return_tensors="pt",
+                        max_length=max_tokens, truncation=True).input_ids.to(device)
+                return input_ids
+            preprocess_fn = partial(preprocess, tokenizer=tokenizer, max_tokens=seq_len, device=device)
 
     logger.info("Run calibration")
     for i in tqdm(range(num_samples)):

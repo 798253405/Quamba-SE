@@ -414,7 +414,14 @@ class QuambaLMHeadModel(MambaLMHeadModel, nn.Module):
             if lm_head_layer not in supported_lm_heads:
                 raise ValueError(f"Invalid lm_head layer: {lm_head_layer}, only support {supported_lm_heads}")
             if lm_head_layer == "Linear":
-                self.lm_head = torch.nn.Linear(d_model, vocab_size)
+                self.lm_head = torch.nn.Linear(d_model, vocab_size, bias=False)
+                # For Quamba1 (no quantized lm_head), norm_f should also be FP16 RMSNorm
+                try:
+                    from mamba_ssm.ops.triton.layer_norm import RMSNorm
+                    norm_epsilon = getattr(config, 'norm_epsilon', 1e-5)
+                    self.backbone.norm_f = RMSNorm(d_model, eps=norm_epsilon, **factory_kwargs)
+                except ImportError:
+                    pass  # Keep QRMSNorm if RMSNorm is not available
             elif lm_head_layer == "W4A16B16O16Linear" or lm_head_layer == "W4A8B16O16Linear" or lm_head_layer == "W8A8B16O16Linear":
                 self.lm_head = getattr(quamba, lm_head_layer)(d_model, vocab_size)
             else:
@@ -431,6 +438,9 @@ class QuambaLMHeadModel(MambaLMHeadModel, nn.Module):
         del loaded_model
         torch.cuda.empty_cache()
         gc.collect()
+        # Ensure lm_head is FP16 for compatibility
+        if hasattr(model, 'lm_head') and isinstance(model.lm_head, torch.nn.Linear):
+            model.lm_head = model.lm_head.half()
         return model.to(device)
 
     def save_pretrained(self, save_directory):
@@ -448,6 +458,60 @@ class QuambaLMHeadModel(MambaLMHeadModel, nn.Module):
         with open(config_path, 'w') as f:
             json.dump(self.config.__dict__, f, indent=4)
 
+    def forward_mode5(self, input_ids, position_ids=None, inference_params=None, num_last_tokens=0):
+        """
+        Mode 5: Dual-path forward with direct mixer calls
+        """
+        hidden_states = self.backbone.embedding(input_ids)
+        residual = None
+
+        for i, layer in enumerate(self.backbone.layers):
+            # Call mixer.forward_mode5 directly, bypassing Block wrapper
+            hidden_states_new = layer.mixer.forward_mode5(hidden_states, inference_params=inference_params)
+            # Add residual
+            hidden_states = hidden_states_new + (residual if residual is not None else hidden_states)
+            # Norm
+            residual = hidden_states
+            hidden_states = layer.norm(hidden_states.to(dtype=layer.norm.weight.dtype))
+
+        # Final norm
+        if not self.backbone.fused_add_norm:
+            residual = (hidden_states + residual) if residual is not None else hidden_states
+            hidden_states = self.backbone.norm_f(residual.to(dtype=self.backbone.norm_f.weight.dtype))
+
+        if num_last_tokens > 0:
+            hidden_states = hidden_states[:, -num_last_tokens:]
+
+        lm_logits = self.lm_head(hidden_states)
+        return lm_logits
+
+    def forward_mode6(self, input_ids, position_ids=None, inference_params=None, num_last_tokens=0):
+        """
+        Mode 6: Dual-path forward with direct mixer calls
+        """
+        hidden_states = self.backbone.embedding(input_ids)
+        residual = None
+
+        for i, layer in enumerate(self.backbone.layers):
+            # Call mixer.forward_mode6 directly, bypassing Block wrapper
+            hidden_states_new = layer.mixer.forward_mode6(hidden_states, inference_params=inference_params)
+            # Add residual
+            hidden_states = hidden_states_new + (residual if residual is not None else hidden_states)
+            # Norm
+            residual = hidden_states
+            hidden_states = layer.norm(hidden_states.to(dtype=layer.norm.weight.dtype))
+
+        # Final norm
+        if not self.backbone.fused_add_norm:
+            residual = (hidden_states + residual) if residual is not None else hidden_states
+            hidden_states = self.backbone.norm_f(residual.to(dtype=self.backbone.norm_f.weight.dtype))
+
+        if num_last_tokens > 0:
+            hidden_states = hidden_states[:, -num_last_tokens:]
+
+        lm_logits = self.lm_head(hidden_states)
+        return lm_logits
+
 
 if __name__ == "__main__":
 
@@ -457,10 +521,3 @@ if __name__ == "__main__":
     # pretrained_model_name = "ut-enyac/quamba2-130m-w8a8"
     config_data = load_config_hf(pretrained_model_name, cache_dir="./configs")
     print(config_data)
-    # model = load_state_dict_hf(pretrained_model_name, cache_dir="./configs")
-    # print(model.keys())
-    # model = QuambaLMHeadModel.from_pretrained(pretrained_model_name, device="cuda", cache_dir="./configs")
-    config = QuambaConfig(**config_data)
-    model = QuambaLMHeadModel(config, device="cuda")
-    model.save_pretrained(pretrained_model_name)
-    # model = QuambaLMHeadModel.from_pretrained(pretrained_model_name, device="cuda", cache_dir=pretrained_model_name)

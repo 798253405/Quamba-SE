@@ -23,6 +23,18 @@ void quant_causal_conv1d_channellast_fwd_cuda(QuantConvParamsBase &params, cudaS
 template<typename input_t, typename weight_t>
 void quant_causal_conv1d_update_cuda(QuantConvParamsBase &params, cudaStream_t stream);
 
+// Mode 2-3: FP32 output version (preserve CUDA internal precision)
+template<typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_fp32_cuda(QuantConvParamsBase &params, cudaStream_t stream);
+
+// Mode 5: FP32 output version (for dual-path comparison)
+template<typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_cuda_mode5(QuantConvParamsBase &params, cudaStream_t stream);
+
+// Mode 6: FP32 output version (same as Mode 5, for dual-path comparison)
+template<typename input_t, typename weight_t>
+void quant_causal_conv1d_fwd_cuda_mode6(QuantConvParamsBase &params, cudaStream_t stream);
+
 
 
 void set_conv_params_fwd(QuantConvParamsBase &params,
@@ -225,7 +237,211 @@ quant_causal_conv1d_update(const at::Tensor &x,
     return out;
 }
 
+at::Tensor
+quant_causal_conv1d_fwd_fp32(
+    const at::Tensor &x, const float &scale_x,
+    const at::Tensor &weight, const float &scale_w,
+    const float &scale_b,
+    const c10::optional<at::Tensor> &bias_,
+    bool silu_activation
+) {
+    auto input_type = x.scalar_type();
+    auto weight_type = weight.scalar_type();
+    TORCH_CHECK(input_type == at::ScalarType::Char);
+    TORCH_CHECK(weight_type == at::ScalarType::Char);
+
+    TORCH_CHECK(x.is_cuda());
+    TORCH_CHECK(weight.is_cuda());
+
+    const auto sizes = x.sizes();
+    const int batch_size = sizes[0];
+    const int dim = sizes[1];
+    const int seqlen = sizes[2];
+    const int width = weight.size(-1);
+
+    CHECK_SHAPE(x, batch_size, dim, seqlen);
+    CHECK_SHAPE(weight, dim, width);
+
+    TORCH_CHECK(x.stride(2) == 1 || x.stride(1) == 1);
+    const bool is_channel_last = x.stride(1) == 1 && x.stride(2) > 1;
+
+    if (is_channel_last) {
+        throw std::logic_error("Channel last not supported for FP32 output mode");
+    }
+    TORCH_CHECK(width >= 2 && width <= 4, "causal_conv1d only supports width between 2 and 4");
+
+    if (bias_.has_value()) {
+        auto bias = bias_.value();
+        TORCH_CHECK(bias.scalar_type() == weight_type);
+        TORCH_CHECK(bias.is_cuda());
+        TORCH_CHECK(bias.stride(-1) == 1);
+        CHECK_SHAPE(bias, dim);
+    }
+
+    // Output is FP32
+    at::Tensor out = torch::empty({batch_size, dim, seqlen},
+                                   torch::dtype(torch::kFloat32).device(x.device()));
+
+    QuantConvParamsBase params;
+    set_conv_params_fwd(params, batch_size, dim, seqlen, width, x, scale_x, weight, scale_w,
+                        out, 1.0f,  // scale_out not used for FP32 mode
+                        scale_b,
+                        bias_.has_value() ? bias_.value().data_ptr() : nullptr,
+                        silu_activation);
+
+    params.seq_idx_ptr = nullptr;
+    params.initial_states_ptr = nullptr;
+    params.final_states_ptr = nullptr;
+
+    // Otherwise the kernel will be launched from cuda:0 device
+    at::cuda::CUDAGuard device_guard{(char)x.get_device()};
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    DISPATCH_ITYPE_INTEGRAL(x.scalar_type(), "quant_causal_conv1d_fwd_fp32", [&] {
+        DISPATCH_WTYPE_INTEGRAL(weight.scalar_type(), "quant_causal_conv1d_fwd_fp32", [&] {
+            quant_causal_conv1d_fwd_fp32_cuda<input_t, weight_t>(params, stream);
+        });
+    });
+    return out;
+}
+
+at::Tensor
+quant_causal_conv1d_fwd_mode5(
+    const at::Tensor &x, const float &scale_x,
+    const at::Tensor &weight, const float &scale_w,
+    const float &scale_b,
+    const c10::optional<at::Tensor> &bias_,
+    bool silu_activation
+) {
+    auto input_type = x.scalar_type();
+    auto weight_type = weight.scalar_type();
+    TORCH_CHECK(input_type == at::ScalarType::Char);
+    TORCH_CHECK(weight_type == at::ScalarType::Char);
+
+    TORCH_CHECK(x.is_cuda());
+    TORCH_CHECK(weight.is_cuda());
+
+    const auto sizes = x.sizes();
+    const int batch_size = sizes[0];
+    const int dim = sizes[1];
+    const int seqlen = sizes[2];
+    const int width = weight.size(-1);
+
+    CHECK_SHAPE(x, batch_size, dim, seqlen);
+    CHECK_SHAPE(weight, dim, width);
+
+    TORCH_CHECK(x.stride(2) == 1 || x.stride(1) == 1);
+    const bool is_channel_last = x.stride(1) == 1 && x.stride(2) > 1;
+
+    if (is_channel_last) {
+        throw std::logic_error("Channel last not supported for Mode 5");
+    }
+    TORCH_CHECK(width >= 2 && width <= 4, "causal_conv1d only supports width between 2 and 4");
+
+    if (bias_.has_value()) {
+        auto bias = bias_.value();
+        TORCH_CHECK(bias.scalar_type() == weight_type);
+        TORCH_CHECK(bias.is_cuda());
+        TORCH_CHECK(bias.stride(-1) == 1);
+        CHECK_SHAPE(bias, dim);
+    }
+
+    // Mode 5: Output is FP32
+    at::Tensor out = torch::empty({batch_size, dim, seqlen},
+                                   torch::dtype(torch::kFloat32).device(x.device()));
+
+    QuantConvParamsBase params;
+    set_conv_params_fwd(params, batch_size, dim, seqlen, width, x, scale_x, weight, scale_w,
+                        out, 1.0f,  // scale_out not used for Mode 5
+                        scale_b,
+                        bias_.has_value() ? bias_.value().data_ptr() : nullptr,
+                        silu_activation);
+
+    params.seq_idx_ptr = nullptr;
+    params.initial_states_ptr = nullptr;
+    params.final_states_ptr = nullptr;
+
+    // Otherwise the kernel will be launched from cuda:0 device
+    at::cuda::CUDAGuard device_guard{(char)x.get_device()};
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    DISPATCH_ITYPE_INTEGRAL(x.scalar_type(), "quant_causal_conv1d_fwd_mode5", [&] {
+        DISPATCH_WTYPE_INTEGRAL(weight.scalar_type(), "quant_causal_conv1d_fwd_mode5", [&] {
+            quant_causal_conv1d_fwd_cuda_mode5<input_t, weight_t>(params, stream);
+        });
+    });
+    return out;
+}
+
+at::Tensor
+quant_causal_conv1d_fwd_mode6(
+    const at::Tensor &x, const float &scale_x,
+    const at::Tensor &weight, const float &scale_w,
+    const float &scale_b,
+    const c10::optional<at::Tensor> &bias_,
+    bool silu_activation
+) {
+    auto input_type = x.scalar_type();
+    auto weight_type = weight.scalar_type();
+    TORCH_CHECK(input_type == at::ScalarType::Char);
+    TORCH_CHECK(weight_type == at::ScalarType::Char);
+
+    TORCH_CHECK(x.is_cuda());
+    TORCH_CHECK(weight.is_cuda());
+
+    const auto sizes = x.sizes();
+    const int batch_size = sizes[0];
+    const int dim = sizes[1];
+    const int seqlen = sizes[2];
+    const int width = weight.size(-1);
+
+    CHECK_SHAPE(x, batch_size, dim, seqlen);
+    CHECK_SHAPE(weight, dim, width);
+
+    TORCH_CHECK(x.stride(2) == 1 || x.stride(1) == 1);
+    const bool is_channel_last = x.stride(1) == 1 && x.stride(2) > 1;
+
+    if (is_channel_last) {
+        throw std::logic_error("Channel last not supported for Mode 6");
+    }
+    TORCH_CHECK(width >= 2 && width <= 4, "causal_conv1d only supports width between 2 and 4");
+
+    if (bias_.has_value()) {
+        auto bias = bias_.value();
+        TORCH_CHECK(bias.scalar_type() == weight_type);
+        TORCH_CHECK(bias.is_cuda());
+        TORCH_CHECK(bias.stride(-1) == 1);
+        CHECK_SHAPE(bias, dim);
+    }
+
+    // Mode 6: Output is FP32 (same as Mode 5)
+    at::Tensor out = torch::empty({batch_size, dim, seqlen},
+                                   torch::dtype(torch::kFloat32).device(x.device()));
+
+    QuantConvParamsBase params;
+    set_conv_params_fwd(params, batch_size, dim, seqlen, width, x, scale_x, weight, scale_w,
+                        out, 1.0f,  // scale_out not used for Mode 6
+                        scale_b,
+                        bias_.has_value() ? bias_.value().data_ptr() : nullptr,
+                        silu_activation);
+
+    params.seq_idx_ptr = nullptr;
+    params.initial_states_ptr = nullptr;
+    params.final_states_ptr = nullptr;
+
+    // Otherwise the kernel will be launched from cuda:0 device
+    at::cuda::CUDAGuard device_guard{(char)x.get_device()};
+    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    DISPATCH_ITYPE_INTEGRAL(x.scalar_type(), "quant_causal_conv1d_fwd_mode6", [&] {
+        DISPATCH_WTYPE_INTEGRAL(weight.scalar_type(), "quant_causal_conv1d_fwd_mode6", [&] {
+            quant_causal_conv1d_fwd_cuda_mode6<input_t, weight_t>(params, stream);
+        });
+    });
+    return out;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fwd", &quant_causal_conv1d_fwd, "Quantized causal conv1d forward");
     m.def("update", &quant_causal_conv1d_update, "Quantized causal conv1d update");
+    m.def("fwd_fp32", &quant_causal_conv1d_fwd_fp32, "Quantized causal conv1d forward with FP32 output (Mode 2-3)");
+    m.def("fwd_mode5", &quant_causal_conv1d_fwd_mode5, "Quantized causal conv1d forward with FP32 output (Mode 5 dual-path)");
+    m.def("fwd_mode6", &quant_causal_conv1d_fwd_mode6, "Quantized causal conv1d forward with FP32 output (Mode 6 dual-path)");
 }

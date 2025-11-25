@@ -1,0 +1,381 @@
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/selective_scan_interface.py:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/selective_scan_interface.py:240: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/layer_norm.py:986: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/layer_norm.py:1045: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout, *args):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/distributed/tensor_parallel.py:26: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, x, weight, bias, process_group=None, sequence_parallel=True):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/distributed/tensor_parallel.py:62: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, grad_output):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/ssd_combined.py:817: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, zxbcdt, conv1d_weight, conv1d_bias, dt_bias, A, D, chunk_size, initial_states=None, seq_idx=None, dt_limit=(0.0, float("inf")), return_final_states=False, activation="silu",
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/ssd_combined.py:895: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout, *args):
+/usr/local/lib/python3.10/dist-packages/torch/backends/__init__.py:46: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:80.)
+  self.setter(val)
+2025-11-07:19:59:56,769 INFO     [main.py:18] Creating Model:quamba-130m-w8a8
+2025-11-07:19:59:59,528 INFO     [main.py:86] Evaluating result using lm_eval (quantized), task(s): ['lambada_openai']
+2025-11-07:19:59:59,554 INFO     [huggingface.py:162] Using device 'cuda'
+`torch_dtype` is deprecated! Use `dtype` instead!
+2025-11-07:20:00:05,841 INFO     [evaluator.py:131] Setting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234
+2025-11-07:20:00:08,146 WARNING  [task.py:322] [Task: lambada_openai] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2025-11-07:20:00:08,146 WARNING  [task.py:322] [Task: lambada_openai] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2025-11-07:20:00:08,260 WARNING  [evaluator.py:222] Overwriting default num_fewshot of lambada_openai from None to 0
+2025-11-07:20:00:08,261 INFO     [task.py:395] Building contexts for lambada_openai on rank 0...
+
+================================================================================
+[Main Debug] Parser arguments for three modes:
+  args.fp32_ssm_input = False
+  args.float_sim_asic_int8 = False
+  args.float_sim_asic_research_se = False
+================================================================================
+
+  0%|          | 0/5153 [00:00<?, ?it/s]  1%|          | 57/5153 [00:00<00:09, 563.71it/s]  2%|▏         | 114/5153 [00:00<00:08, 564.87it/s]  3%|▎         | 171/5153 [00:00<00:08, 566.35it/s]  4%|▍         | 228/5153 [00:00<00:08, 566.98it/s]  6%|▌         | 286/5153 [00:00<00:08, 570.55it/s]  7%|▋         | 347/5153 [00:00<00:08, 581.27it/s]  8%|▊         | 407/5153 [00:00<00:08, 586.76it/s]  9%|▉         | 466/5153 [00:00<00:07, 587.07it/s] 10%|█         | 526/5153 [00:00<00:07, 588.08it/s] 11%|█▏        | 586/5153 [00:01<00:07, 589.44it/s] 13%|█▎        | 645/5153 [00:01<00:07, 589.43it/s] 14%|█▎        | 705/5153 [00:01<00:07, 590.20it/s] 15%|█▍        | 765/5153 [00:01<00:07, 591.41it/s] 16%|█▌        | 825/5153 [00:01<00:07, 593.26it/s] 17%|█▋        | 885/5153 [00:01<00:07, 594.22it/s] 18%|█▊        | 946/5153 [00:01<00:07, 596.12it/s] 20%|█▉        | 1006/5153 [00:01<00:06, 594.30it/s] 21%|██        | 1066/5153 [00:01<00:06, 594.66it/s] 22%|██▏       | 1127/5153 [00:01<00:06, 596.31it/s] 23%|██▎       | 1187/5153 [00:02<00:06, 597.34it/s] 24%|██▍       | 1247/5153 [00:02<00:06, 598.07it/s] 25%|██▌       | 1308/5153 [00:02<00:06, 598.67it/s] 27%|██▋       | 1368/5153 [00:02<00:06, 598.79it/s] 28%|██▊       | 1428/5153 [00:02<00:06, 599.14it/s] 29%|██▉       | 1488/5153 [00:02<00:06, 599.21it/s] 30%|███       | 1548/5153 [00:02<00:06, 598.45it/s] 31%|███       | 1608/5153 [00:02<00:05, 596.77it/s] 32%|███▏      | 1668/5153 [00:02<00:05, 596.82it/s] 34%|███▎      | 1728/5153 [00:02<00:05, 597.56it/s] 35%|███▍      | 1788/5153 [00:03<00:05, 597.89it/s] 36%|███▌      | 1848/5153 [00:03<00:05, 595.22it/s] 37%|███▋      | 1908/5153 [00:03<00:05, 594.76it/s] 38%|███▊      | 1968/5153 [00:03<00:05, 594.66it/s] 39%|███▉      | 2028/5153 [00:03<00:05, 594.96it/s] 41%|████      | 2088/5153 [00:03<00:05, 594.85it/s] 42%|████▏     | 2148/5153 [00:03<00:05, 594.93it/s] 43%|████▎     | 2208/5153 [00:03<00:04, 594.18it/s] 44%|████▍     | 2268/5153 [00:03<00:04, 594.55it/s] 45%|████▌     | 2328/5153 [00:03<00:04, 594.66it/s] 46%|████▋     | 2388/5153 [00:04<00:04, 595.45it/s] 48%|████▊     | 2448/5153 [00:04<00:04, 595.90it/s] 49%|████▊     | 2508/5153 [00:04<00:04, 596.09it/s] 50%|████▉     | 2568/5153 [00:04<00:04, 596.13it/s] 51%|█████     | 2628/5153 [00:04<00:04, 596.27it/s] 52%|█████▏    | 2688/5153 [00:04<00:04, 596.89it/s] 53%|█████▎    | 2748/5153 [00:04<00:04, 597.59it/s] 54%|█████▍    | 2808/5153 [00:04<00:03, 597.56it/s] 56%|█████▌    | 2868/5153 [00:04<00:03, 597.42it/s] 57%|█████▋    | 2928/5153 [00:04<00:03, 596.99it/s] 58%|█████▊    | 2988/5153 [00:05<00:03, 597.09it/s] 59%|█████▉    | 3048/5153 [00:05<00:03, 594.65it/s] 60%|██████    | 3108/5153 [00:05<00:03, 595.23it/s] 61%|██████▏   | 3168/5153 [00:05<00:03, 595.97it/s] 63%|██████▎   | 3229/5153 [00:05<00:03, 597.35it/s] 64%|██████▍   | 3289/5153 [00:05<00:03, 597.10it/s] 65%|██████▍   | 3349/5153 [00:05<00:03, 597.54it/s] 66%|██████▌   | 3409/5153 [00:05<00:02, 597.72it/s] 67%|██████▋   | 3469/5153 [00:05<00:02, 597.29it/s] 68%|██████▊   | 3529/5153 [00:05<00:02, 597.13it/s] 70%|██████▉   | 3590/5153 [00:06<00:02, 598.52it/s] 71%|███████   | 3650/5153 [00:06<00:02, 598.79it/s] 72%|███████▏  | 3710/5153 [00:06<00:02, 599.12it/s] 73%|███████▎  | 3770/5153 [00:06<00:02, 599.14it/s] 74%|███████▍  | 3830/5153 [00:06<00:02, 599.38it/s] 75%|███████▌  | 3890/5153 [00:06<00:02, 597.90it/s] 77%|███████▋  | 3950/5153 [00:06<00:02, 596.75it/s] 78%|███████▊  | 4010/5153 [00:06<00:01, 595.97it/s] 79%|███████▉  | 4070/5153 [00:06<00:01, 596.73it/s] 80%|████████  | 4130/5153 [00:06<00:01, 597.49it/s] 81%|████████▏ | 4191/5153 [00:07<00:01, 598.55it/s] 82%|████████▏ | 4251/5153 [00:07<00:01, 597.09it/s] 84%|████████▎ | 4311/5153 [00:07<00:01, 595.68it/s] 85%|████████▍ | 4371/5153 [00:07<00:01, 596.08it/s] 86%|████████▌ | 4432/5153 [00:07<00:01, 598.00it/s] 87%|████████▋ | 4493/5153 [00:07<00:01, 599.46it/s] 88%|████████▊ | 4554/5153 [00:07<00:00, 599.84it/s] 90%|████████▉ | 4614/5153 [00:07<00:00, 597.99it/s] 91%|█████████ | 4675/5153 [00:07<00:00, 599.98it/s] 92%|█████████▏| 4736/5153 [00:07<00:00, 601.41it/s] 93%|█████████▎| 4797/5153 [00:08<00:00, 602.79it/s] 94%|█████████▍| 4858/5153 [00:08<00:00, 603.24it/s] 95%|█████████▌| 4919/5153 [00:08<00:00, 603.84it/s] 97%|█████████▋| 4980/5153 [00:08<00:00, 604.37it/s] 98%|█████████▊| 5041/5153 [00:08<00:00, 604.44it/s] 99%|█████████▉| 5102/5153 [00:08<00:00, 604.76it/s]100%|██████████| 5153/5153 [00:08<00:00, 595.83it/s]
+2025-11-07:20:00:16,995 INFO     [evaluator.py:362] Running loglikelihood requests
+Running loglikelihood requests:   0%|          | 0/5153 [00:00<?, ?it/s]Running loglikelihood requests:   0%|          | 1/5153 [00:03<4:51:20,  3.39s/it]
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+
+================================================================================
+[Layer 23 Call #1] After Conv1D
+  x dtype: torch.int8, shape: torch.Size([16, 1536, 223])
+  First 10 values (high precision):
+    x[0] = -6
+    x[1] = 1
+    x[2] = -1
+    x[3] = -1
+    x[4] = -7
+    x[5] = -9
+    x[6] = -1
+    x[7] = -1
+    x[8] = 0
+    x[9] = 0
+
+  === Layer 23 All Scales ===
+  in_proj scales:
+  conv1d scales:
+    input_scale: 0.1019287109
+    weight_scale: 0.0085906982
+    bias_scale: 0.0150451660
+    output_scale: 0.0121623231
+  x_proj scales:
+  selective_scan scales:
+    u_scale: 0.0121623231
+    dt_scale: 0.0847778320
+  out_proj scales:
+  After x_proj: x_dbl dtype: torch.int8, first 3: [3, -1, 2]
+  dt (before dt_proj) dtype: torch.int8, first 3: [3, -1, 2]
+  After dt_proj: dt dtype: torch.int8, first 3: [-6, 0, -5]
+  B dtype: torch.int8, first 3: [-10, -2, -4]
+  C dtype: torch.int8, first 3: [1, 1, 0]
+  z dtype: torch.int8, first 3: [-2, -2, -3]
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = false
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=False, se=False
+  u dtype: torch.int8, dt dtype: torch.int8
+  Will use FP32 SSM: False
+
+  After SSM: y dtype: torch.float16, first 3: [0.032501220703125, 0.00402069091796875, 0.0]
+  After had: y dtype: torch.int8, first 3: [-5, 4, 0]
+  After out_proj: out dtype: torch.float16, first 3: [-14.109375, -0.56689453125, 2.505859375]
+================================================================================
+
+
+================================================================================
+[Layer 23 Call #2] After Conv1D
+  x dtype: torch.int8, shape: torch.Size([16, 1536, 136])
+  First 10 values (high precision):
+    x[0] = -6
+    x[1] = -1
+    x[2] = -4
+    x[3] = -8
+    x[4] = -3
+    x[5] = 5
+    x[6] = -3
+    x[7] = -3
+    x[8] = -4
+    x[9] = -8
+  After x_proj: x_dbl dtype: torch.int8, first 3: [2, 1, 1]
+  dt (before dt_proj) dtype: torch.int8, first 3: [2, 1, 1]
+  After dt_proj: dt dtype: torch.int8, first 3: [-2, 0, -1]
+  B dtype: torch.int8, first 3: [-7, -10, -11]
+  C dtype: torch.int8, first 3: [-1, 7, 9]
+  z dtype: torch.int8, first 3: [0, -4, 0]
+Running loglikelihood requests:   1%|▏         | 65/5153 [00:03<03:16, 25.95it/s] Running loglikelihood requests:   3%|▎         | 129/5153 [00:03<01:25, 58.83it/s]Running loglikelihood requests:   4%|▎         | 193/5153 [00:03<00:49, 99.38it/s]Running loglikelihood requests:   5%|▍         | 257/5153 [00:03<00:33, 147.17it/s]Running loglikelihood requests:   6%|▌         | 321/5153 [00:03<00:24, 201.05it/s]Running loglikelihood requests:   7%|▋         | 386/5153 [00:04<00:18, 259.22it/s]Running loglikelihood requests:   9%|▊         | 450/5153 [00:04<00:14, 315.81it/s]Running loglikelihood requests:  10%|▉         | 514/5153 [00:04<00:12, 368.59it/s]Running loglikelihood requests:  11%|█         | 578/5153 [00:04<00:11, 412.52it/s]Running loglikelihood requests:  12%|█▏        | 642/5153 [00:04<00:09, 451.62it/s]Running loglikelihood requests:  14%|█▎        | 706/5153 [00:04<00:09, 484.11it/s]Running loglikelihood requests:  15%|█▍        | 770/5153 [00:04<00:08, 509.21it/s]Running loglikelihood requests:  16%|█▌        | 834/5153 [00:04<00:08, 527.79it/s]Running loglikelihood requests:  17%|█▋        | 898/5153 [00:04<00:07, 541.05it/s]Running loglikelihood requests:  19%|█▊        | 962/5153 [00:05<00:07, 551.02it/s]Running loglikelihood requests:  20%|█▉        | 1026/5153 [00:05<00:07, 559.06it/s]Running loglikelihood requests:  21%|██        | 1090/5153 [00:05<00:07, 565.19it/s]Running loglikelihood requests:  22%|██▏       | 1154/5153 [00:05<00:07, 568.73it/s]Running loglikelihood requests:  24%|██▎       | 1218/5153 [00:05<00:06, 570.35it/s]Running loglikelihood requests:  25%|██▍       | 1282/5153 [00:05<00:06, 559.44it/s]Running loglikelihood requests:  26%|██▌       | 1346/5153 [00:05<00:06, 558.67it/s]Running loglikelihood requests:  27%|██▋       | 1410/5153 [00:05<00:06, 563.86it/s]Running loglikelihood requests:  29%|██▊       | 1474/5153 [00:05<00:06, 568.43it/s]Running loglikelihood requests:  30%|██▉       | 1538/5153 [00:06<00:06, 571.57it/s]Running loglikelihood requests:  31%|███       | 1602/5153 [00:06<00:06, 574.33it/s]Running loglikelihood requests:  32%|███▏      | 1666/5153 [00:06<00:06, 575.89it/s]Running loglikelihood requests:  34%|███▎      | 1730/5153 [00:06<00:05, 574.13it/s]Running loglikelihood requests:  35%|███▍      | 1794/5153 [00:06<00:05, 574.96it/s]Running loglikelihood requests:  36%|███▌      | 1858/5153 [00:06<00:05, 576.23it/s]Running loglikelihood requests:  37%|███▋      | 1922/5153 [00:06<00:05, 577.35it/s]Running loglikelihood requests:  39%|███▊      | 1986/5153 [00:06<00:05, 576.95it/s]Running loglikelihood requests:  40%|███▉      | 2050/5153 [00:06<00:05, 577.53it/s]Running loglikelihood requests:  41%|████      | 2114/5153 [00:07<00:05, 578.58it/s]Running loglikelihood requests:  42%|████▏     | 2178/5153 [00:07<00:05, 580.09it/s]Running loglikelihood requests:  44%|████▎     | 2242/5153 [00:07<00:05, 580.91it/s]Running loglikelihood requests:  45%|████▍     | 2306/5153 [00:07<00:04, 581.39it/s]Running loglikelihood requests:  46%|████▌     | 2370/5153 [00:07<00:04, 581.93it/s]Running loglikelihood requests:  47%|████▋     | 2434/5153 [00:07<00:04, 582.29it/s]Running loglikelihood requests:  48%|████▊     | 2498/5153 [00:07<00:04, 581.66it/s]Running loglikelihood requests:  50%|████▉     | 2562/5153 [00:07<00:04, 581.36it/s]Running loglikelihood requests:  51%|█████     | 2626/5153 [00:07<00:04, 582.04it/s]Running loglikelihood requests:  52%|█████▏    | 2690/5153 [00:08<00:04, 581.43it/s]Running loglikelihood requests:  53%|█████▎    | 2754/5153 [00:08<00:04, 581.70it/s]Running loglikelihood requests:  55%|█████▍    | 2818/5153 [00:08<00:04, 582.36it/s]Running loglikelihood requests:  56%|█████▌    | 2882/5153 [00:08<00:03, 580.17it/s]Running loglikelihood requests:  57%|█████▋    | 2946/5153 [00:08<00:03, 577.80it/s]Running loglikelihood requests:  58%|█████▊    | 3010/5153 [00:08<00:03, 578.71it/s]Running loglikelihood requests:  60%|█████▉    | 3074/5153 [00:08<00:03, 578.20it/s]Running loglikelihood requests:  61%|██████    | 3138/5153 [00:08<00:03, 578.38it/s]Running loglikelihood requests:  62%|██████▏   | 3203/5153 [00:08<00:03, 581.68it/s]Running loglikelihood requests:  63%|██████▎   | 3267/5153 [00:09<00:03, 581.84it/s]Running loglikelihood requests:  65%|██████▍   | 3331/5153 [00:09<00:03, 580.47it/s]Running loglikelihood requests:  66%|██████▌   | 3395/5153 [00:09<00:03, 580.68it/s]Running loglikelihood requests:  67%|██████▋   | 3459/5153 [00:09<00:02, 580.90it/s]Running loglikelihood requests:  68%|██████▊   | 3523/5153 [00:09<00:02, 580.44it/s]Running loglikelihood requests:  70%|██████▉   | 3587/5153 [00:09<00:02, 578.52it/s]Running loglikelihood requests:  71%|███████   | 3651/5153 [00:09<00:02, 580.61it/s]Running loglikelihood requests:  72%|███████▏  | 3715/5153 [00:09<00:02, 580.55it/s]Running loglikelihood requests:  73%|███████▎  | 3779/5153 [00:09<00:02, 581.45it/s]Running loglikelihood requests:  75%|███████▍  | 3843/5153 [00:10<00:02, 582.42it/s]Running loglikelihood requests:  76%|███████▌  | 3907/5153 [00:10<00:02, 582.29it/s]Running loglikelihood requests:  77%|███████▋  | 3971/5153 [00:10<00:02, 582.73it/s]Running loglikelihood requests:  78%|███████▊  | 4035/5153 [00:10<00:01, 583.82it/s]Running loglikelihood requests:  80%|███████▉  | 4099/5153 [00:10<00:01, 579.80it/s]Running loglikelihood requests:  81%|████████  | 4163/5153 [00:10<00:01, 581.16it/s]Running loglikelihood requests:  82%|████████▏ | 4227/5153 [00:10<00:01, 582.45it/s]Running loglikelihood requests:  83%|████████▎ | 4291/5153 [00:10<00:01, 581.15it/s]Running loglikelihood requests:  85%|████████▍ | 4355/5153 [00:10<00:01, 581.84it/s]Running loglikelihood requests:  86%|████████▌ | 4419/5153 [00:11<00:01, 583.01it/s]Running loglikelihood requests:  87%|████████▋ | 4483/5153 [00:11<00:01, 582.94it/s]Running loglikelihood requests:  88%|████████▊ | 4547/5153 [00:11<00:01, 583.63it/s]Running loglikelihood requests:  89%|████████▉ | 4611/5153 [00:11<00:00, 583.46it/s]Running loglikelihood requests:  91%|█████████ | 4675/5153 [00:11<00:00, 583.71it/s]Running loglikelihood requests:  92%|█████████▏| 4739/5153 [00:11<00:00, 583.93it/s]Running loglikelihood requests:  93%|█████████▎| 4803/5153 [00:11<00:00, 585.19it/s]Running loglikelihood requests:  94%|█████████▍| 4867/5153 [00:11<00:00, 584.15it/s]Running loglikelihood requests:  96%|█████████▌| 4931/5153 [00:11<00:00, 583.42it/s]Running loglikelihood requests:  97%|█████████▋| 4995/5153 [00:12<00:00, 582.89it/s]Running loglikelihood requests:  98%|█████████▊| 5059/5153 [00:12<00:00, 583.14it/s]Running loglikelihood requests:  99%|█████████▉| 5123/5153 [00:12<00:00, 583.01it/s]Running loglikelihood requests: 100%|██████████| 5153/5153 [00:12<00:00, 419.15it/s]
+  After SSM: y dtype: torch.float16, first 3: [-0.0, 0.042022705078125, 0.01004791259765625]
+  After had: y dtype: torch.int8, first 3: [-5, 4, 4]
+  After out_proj: out dtype: torch.float16, first 3: [1.056640625, -0.7783203125, -5.859375]
+================================================================================
+
+
+================================================================================
+[Layer 23 Call #3] After Conv1D
+  x dtype: torch.int8, shape: torch.Size([16, 1536, 124])
+  First 10 values (high precision):
+    x[0] = -5
+    x[1] = 1
+    x[2] = -2
+    x[3] = 4
+    x[4] = -6
+    x[5] = -3
+    x[6] = -3
+    x[7] = -8
+    x[8] = -12
+    x[9] = -6
+  After x_proj: x_dbl dtype: torch.int8, first 3: [-1, -1, -1]
+  dt (before dt_proj) dtype: torch.int8, first 3: [-1, -1, -1]
+  After dt_proj: dt dtype: torch.int8, first 3: [1, -1, 3]
+  B dtype: torch.int8, first 3: [-10, -6, -11]
+  C dtype: torch.int8, first 3: [4, 4, 7]
+  z dtype: torch.int8, first 3: [4, -5, -7]
+  After SSM: y dtype: torch.float16, first 3: [-0.306884765625, -0.01145172119140625, 0.16259765625]
+  After had: y dtype: torch.int8, first 3: [4, -7, -9]
+  After out_proj: out dtype: torch.float16, first 3: [-22.921875, -1.3037109375, 18.078125]
+================================================================================
+
+bootstrapping for stddev: perplexity
+  0%|          | 0/100 [00:00<?, ?it/s]  1%|          | 1/100 [00:01<02:27,  1.49s/it] 13%|█▎        | 13/100 [00:02<00:15,  5.46it/s] 25%|██▌       | 25/100 [00:03<00:09,  7.92it/s] 27%|██▋       | 27/100 [00:03<00:08,  8.33it/s] 30%|███       | 30/100 [00:04<00:07,  9.52it/s] 37%|███▋      | 37/100 [00:05<00:08,  7.87it/s] 41%|████      | 41/100 [00:05<00:06,  9.63it/s] 43%|████▎     | 43/100 [00:05<00:05,  9.65it/s] 49%|████▉     | 49/100 [00:06<00:06,  8.35it/s] 52%|█████▏    | 52/100 [00:06<00:05,  9.13it/s] 54%|█████▍    | 54/100 [00:06<00:04, 10.02it/s] 61%|██████    | 61/100 [00:07<00:04,  8.61it/s] 63%|██████▎   | 63/100 [00:07<00:04,  8.83it/s] 65%|██████▌   | 65/100 [00:07<00:03,  9.62it/s] 67%|██████▋   | 67/100 [00:08<00:03,  8.87it/s] 73%|███████▎  | 73/100 [00:08<00:02,  9.17it/s] 75%|███████▌  | 75/100 [00:09<00:02,  8.43it/s] 77%|███████▋  | 77/100 [00:09<00:02,  9.40it/s] 79%|███████▉  | 79/100 [00:09<00:02,  8.61it/s] 85%|████████▌ | 85/100 [00:10<00:01, 10.29it/s] 87%|████████▋ | 87/100 [00:10<00:01,  7.51it/s] 94%|█████████▍| 94/100 [00:10<00:00, 12.97it/s] 97%|█████████▋| 97/100 [00:10<00:00, 14.16it/s]100%|██████████| 100/100 [00:11<00:00, 12.83it/s]100%|██████████| 100/100 [00:11<00:00,  8.88it/s]
+fatal: detected dubious ownership in repository at '/workspace/Quamba'
+To add an exception for this directory, call:
+
+	git config --global --add safe.directory /workspace/Quamba
+2025-11-07:20:00:44,278 INFO     [lm_eval_wrapper.py:121] 0-shot evaluation results: 
+|    Tasks     |Version|Filter|n-shot|  Metric  | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|------:|---|-----:|
+|lambada_openai|      1|none  |     0|perplexity|22.2176|±  |0.7351|
+|              |       |none  |     0|acc       | 0.3971|±  |0.0068|
+
+2025-11-07:20:00:44,279 INFO     [main.py:129] Saving result to logs_cuda_baseline/quamba-130m-w8a8.json
+2025-11-07:20:00:44,279 INFO     [percentile_logger.py:138] ✅ Percentile实验日志已保存到: percentileRangeResults/experiments.jsonl
+
+================================================================================
+📊 Percentile实验摘要
+================================================================================
+
+🔧 配置:
+  模型: quamba-130m-w8a8
+  量化: W8A8
+  Percentile Alpha: None
+  Group Heads: False
+
+🎯 最终结果:
+  Accuracy: 39.71%
+  Perplexity: 22.218
+
+================================================================================
+
+
+================================================================================
+  python3 main.py quamba-130m-w8a8 --quantize --batch_size 16 --eval_zero_shot --task_list lambada_openai --log_dir logs_cuda_baseline --pretrained_dir pretrained_models/quamba1/default
+================================================================================
+

@@ -48,12 +48,19 @@ def build_mamba_and_tokenizer(args, model_type="mamba"):
 
 
 def set_deterministic(seed):
-    # Fix all possible random seef for reproduce
+    # Fix all possible random seed for reproduce
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     random.seed(seed)
     np.random.seed(seed)
+
+    # Enable deterministic CUDA operations (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # Set CUDA operations to be deterministic
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 def get_quantize_options(parser):
     # quantization parameters
@@ -119,6 +126,22 @@ def get_quantize_options(parser):
         help='Parent directory name under pretrained_dir for saving quantized models. '
         'Default: "testPercentileRange". Model will be saved to {pretrained_dir}/{output_subdir}/pa-{percentile_alpha}/{model_name}/ '
         'or {pretrained_dir}/{output_subdir}/default/{model_name}/ if percentile_alpha is not specified.'
+    )
+    # Quamba mode selection (unified interface)
+    parser.add_argument(
+        '--mode', type=str, default='0',
+        choices=['0', '2-0', '2-1', '2-2', '2-3', '2-4', '3', '4', '5', '6'],
+        help='Quamba quantization mode: '
+        '0 (Baseline INT8 CUDA), '
+        '2-0 (CUDA INT8 + Requantization), '
+        '2-1 (PyTorch INT8 Direct), '
+        '2-2 (FP32 PyTorch INT8 Grid), '
+        '2-3 (TRUE FP32 Conv + INT8 SSM), '
+        '2-4 (TRUE FP32 Conv + FP32 SSM), '
+        '3 (Hybrid Precision), '
+        '4 (Selective Grid FP32), '
+        '5 (Dual-Path: FP32 Conv/SSM vs Mode 0), '
+        '6 (Dual-Path: Shared FP32 input comparison)'
     )
 
 def parse_options():

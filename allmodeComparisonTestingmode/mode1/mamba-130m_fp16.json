@@ -1,0 +1,42 @@
+{
+    "lm_eval": {
+        "lambada_openai": {
+            "perplexity,none": 22.888028791384134,
+            "perplexity_stderr,none": 5.9312430714155,
+            "acc,none": 0.43,
+            "acc_stderr,none": 0.049756985195624284
+        }
+    },
+    "timestamp": "2025-11-10 16:05:13",
+    "args": {
+        "model": "pretrained_models/mambaOriginalHuggingfaceDownload/mamba-130m",
+        "verbose": false,
+        "batch_size": 1,
+        "task_list": [
+            "lambada_openai"
+        ],
+        "eval_zero_shot": true,
+        "eval_few_shot": false,
+        "fewshot": 0,
+        "eval_generation": false,
+        "testing": true,
+        "eval_ppl": false,
+        "ppl_dataset": "wikitext2",
+        "log_dir": "allmodeComparison/mode1",
+        "quantize": false,
+        "calib_data_num": 512,
+        "calib_seqlen": 512,
+        "pretrained_dir": null,
+        "group_heads": false,
+        "quantize_embedding": false,
+        "quantize_lm_head": false,
+        "apply_gptq": false,
+        "w_bits": 8,
+        "a_bits": 8,
+        "hybrid_blocks": false,
+        "hybrid_blocks_config": null,
+        "percentile_alpha": null,
+        "output_subdir": "testPercentileRange",
+        "mode": "0"
+    }
+}

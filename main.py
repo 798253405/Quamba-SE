@@ -25,10 +25,29 @@ def main(args):
     )
     plogger.log_config(args)
 
+    # Setup Quamba mode using unified interface
+    from quamba.mode_config import setup_quamba_mode
+    setup_quamba_mode(args.mode, verbose=True)
+
     model, tokenizer, is_quamba = build_mamba_and_tokenizer(args, model_type)
     model.config.use_cache = False
     logs = {}
-    
+
+    # For Mode 5/6, replace the forward method with the dual-path version
+    if args.mode in ['5', '6']:
+        if not hasattr(model, f'forward_mode{args.mode}'):
+            logging.error(f"Model does not support Mode {args.mode}. Please ensure the model has forward_mode{args.mode} method.")
+            raise NotImplementedError(f"Mode {args.mode} not implemented for this model")
+
+        logging.info(f"Using Mode {args.mode} dual-path forward method")
+        # Store original forward for reference
+        model._original_forward = model.forward
+        # Replace with mode-specific forward
+        if args.mode == '5':
+            model.forward = model.forward_mode5
+        elif args.mode == '6':
+            model.forward = model.forward_mode6
+
     if args.quantize:
         """
         Start evaluating Quantized Models from here
@@ -83,7 +102,12 @@ def main(args):
         logging.warning("No task to run with, try `--eval_ppl`, `--eval_zero_shot`, `--eval_generation`, `--eval_few_shot --fewshot n`?")
         
     if args.log_dir:
+        from datetime import datetime
+
+        # Add timestamp to logs
+        logs['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logs['args'] = vars(args)
+
         os.makedirs(args.log_dir, exist_ok=True)
         if args.quantize:
             log_name = f"{model_name}" if is_quamba else f"{model_name}_w{args.w_bits}a{args.a_bits}"
@@ -93,6 +117,7 @@ def main(args):
         with open(log_paths, 'a') as fp:
             logging.info(f"Saving result to {log_paths}")
             json.dump(logs, fp, indent=4)
+            fp.write('\n')  # Add newline for better separation between runs
 
     # 记录最终结果到percentile logger
     if 'lm_eval' in logs:

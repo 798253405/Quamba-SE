@@ -334,3 +334,550 @@ void quant_sscan_fwd_cuda(QuantSSMParams &params, cudaStream_t stream) {
         quant_sscan_fwd_launch<128, 16, input_t, weight_t>(params, stream);
     }
 }
+
+
+/**************************************************/
+/*   Mode 5: quant_sscan_fwd_kernel_mode5         */
+/*   FP32 input u (skip INT8 dequantization)     */
+/**************************************************/
+
+// Helper function to load FP32 input directly (Mode 5/6 only)
+// Note: This uses direct memory access since smem_load is designed for INT8
+template<int kNThreads, int kNItems, bool kDirectIO>
+__device__ __forceinline__ void load_input_fp32_direct(float *u, float (&u_vals)[kNItems], int seqlen) {
+    if constexpr (kDirectIO) {
+        #pragma unroll
+        for (int i = 0; i < kNItems; ++i) {
+            u_vals[i] = u[threadIdx.x + i * kNThreads];
+        }
+    } else {
+        #pragma unroll
+        for (int i = 0; i < kNItems; ++i) {
+            int idx = threadIdx.x * kNItems + i;
+            u_vals[i] = idx < seqlen ? u[idx] : 0.0f;
+        }
+    }
+}
+
+template<typename Ktraits>
+__global__ __launch_bounds__(Ktraits::kNThreads, Ktraits::kMinBlocks)
+void quant_sscan_fwd_kernel_mode5(QuantSSMParams params) {
+    constexpr bool kIsVariableB = Ktraits::kIsVariableB;
+    constexpr bool kIsVariableC = Ktraits::kIsVariableC;
+    constexpr bool kHasZ = Ktraits::kHasZ;
+    constexpr int kNThreads = Ktraits::kNThreads;
+    constexpr int kNItems = Ktraits::kNItems;
+    constexpr int kNRows = Ktraits::kNRows;
+    constexpr bool kDirectIO = Ktraits::kDirectIO;
+    using input_t = typename Ktraits::input_t;
+    using weight_t = typename Ktraits::weight_t;
+    using scan_t = typename Ktraits::scan_t;
+
+    // Shared memory
+    extern __shared__ char smem_[];
+    auto& smem_load = reinterpret_cast<typename Ktraits::BlockLoadT::TempStorage&>(smem_);
+    auto& smem_load_weight = reinterpret_cast<typename Ktraits::BlockLoadWeightT::TempStorage&>(smem_);
+    auto& smem_load_weight1 = *reinterpret_cast<typename Ktraits::BlockLoadWeightT::TempStorage*>(smem_ + sizeof(typename Ktraits::BlockLoadWeightT::TempStorage));
+    auto& smem_store = reinterpret_cast<typename Ktraits::BlockStoreT::TempStorage&>(smem_);
+    auto& smem_scan = *reinterpret_cast<typename Ktraits::BlockScanT::TempStorage*>(smem_ + Ktraits::kSmemIOSize);
+    scan_t *smem_running_prefix = reinterpret_cast<scan_t *>(smem_ + Ktraits::kSmemSize);
+
+    const int batch_id = blockIdx.x;
+    const int dim_id = blockIdx.y;
+    const int group_id = dim_id / (params.dim_ngroups_ratio);
+
+    // Mode 5: u is float* instead of input_t*
+    float *u = reinterpret_cast<float *>(params.u_ptr) + batch_id * params.u_batch_stride
+        + dim_id * kNRows * params.u_d_stride;
+
+    input_t *delta = reinterpret_cast<input_t *>(params.delta_ptr) + batch_id * params.delta_batch_stride
+        + dim_id * kNRows * params.delta_d_stride;
+    weight_t *A = reinterpret_cast<weight_t *>(params.A_ptr) + dim_id * kNRows * params.A_d_stride;
+    weight_t *B = reinterpret_cast<weight_t *>(params.B_ptr) + dim_id * kNRows * params.B_d_stride;
+    input_t *Bvar = reinterpret_cast<input_t *>(params.B_ptr) + batch_id * params.B_batch_stride + group_id * params.B_group_stride;
+    weight_t *C = reinterpret_cast<weight_t *>(params.C_ptr) + dim_id * kNRows * params.C_d_stride;
+    input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;
+    input_t *x = reinterpret_cast<input_t *>(params.x_ptr) + (batch_id * params.dim + dim_id * kNRows) * params.n_chunks * params.dstate;
+
+    float D_val[kNRows] = {0};
+    if (params.D_ptr != nullptr) {
+        const float scale_D = *reinterpret_cast<float *>(params.scale_D_ptr);
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            weight_t D_load = reinterpret_cast<weight_t *>(params.D_ptr)[dim_id * kNRows + r];
+            D_val[r] = scale_D * static_cast<float>(D_load);
+        }
+    }
+
+    float delta_bias[kNRows] = {0};
+    if (params.delta_bias_ptr != nullptr) {
+        const float scale_delta_bias = *reinterpret_cast<float *>(params.scale_delta_bias_ptr);
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            weight_t delta_bias_load = reinterpret_cast<weight_t *>(params.delta_bias_ptr)[dim_id * kNRows + r];
+            delta_bias[r] = scale_delta_bias * static_cast<float>(delta_bias_load);
+        }
+    }
+
+    constexpr int kChunkSize = kNThreads * kNItems;
+    const float scale_delta = *reinterpret_cast<float *>(params.scale_delta_ptr);
+    const float scale_ssm_state = *reinterpret_cast<float *>(params.scale_ssm_state_ptr);
+    // Mode 5: scale_u not used (u is already FP32)
+    const float scale_A = *reinterpret_cast<float *>(params.scale_A_ptr);
+    const float scale_B = *reinterpret_cast<float *>(params.scale_B_ptr);
+    const float scale_C = *reinterpret_cast<float *>(params.scale_C_ptr);
+
+    for (int chunk = 0; chunk < params.n_chunks; ++chunk) {
+        // Mode 5: u_vals_load is float instead of input_t
+        float u_vals_load[kNRows][kNItems];
+        input_t delta_vals_load[kNRows][kNItems];
+
+        __syncthreads();
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            if constexpr (!kDirectIO) {
+                if (r > 0) { __syncthreads(); }
+            }
+            // Mode 5: Load FP32 u directly (no shared memory block load for FP32)
+            load_input_fp32_direct<kNThreads, kNItems, kDirectIO>(u + r * params.u_d_stride, u_vals_load[r], params.seqlen - chunk * kChunkSize);
+            if constexpr (!kDirectIO) { __syncthreads(); }
+            load_input<Ktraits>(delta + r * params.delta_d_stride, delta_vals_load[r], smem_load, params.seqlen - chunk * kChunkSize);
+        }
+        u += kChunkSize;
+        delta += kChunkSize;
+
+        float delta_vals[kNRows][kNItems], delta_u_vals[kNRows][kNItems], out_vals[kNRows][kNItems];
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            #pragma unroll
+            for (int i = 0; i < kNItems; ++i) {
+                // Mode 5: u_val is already FP32, no dequantization needed
+                float u_val = u_vals_load[r][i];
+                delta_vals[r][i] = scale_delta * static_cast<float>(delta_vals_load[r][i]) + delta_bias[r];
+                if (params.delta_softplus) {
+                    delta_vals[r][i] = delta_vals[r][i] <= 20.f ? log1pf(expf(delta_vals[r][i])) : delta_vals[r][i];
+                }
+                delta_u_vals[r][i] = delta_vals[r][i] * u_val;
+                out_vals[r][i] = D_val[r] * u_val;
+            }
+        }
+
+        // SSM state space computation (same as Mode 0)
+        __syncthreads();
+        for (int state_idx = 0; state_idx < params.dstate; ++state_idx) {
+            float A_val[kNRows];
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                A_val[r] = -expf(scale_A * static_cast<float>(A[state_idx * params.A_dstate_stride + r * params.A_d_stride]));
+            }
+
+            float BC_val[kNRows];
+            weight_t B_vals[kNItems], C_vals[kNItems];  // Fixed: kNItems not kNRows
+            if constexpr (kIsVariableB) {
+                load_weight<Ktraits>(Bvar + state_idx * params.B_dstate_stride, B_vals,
+                    smem_load_weight, (params.seqlen - chunk * kChunkSize));
+                if constexpr (!kIsVariableC) {
+                    #pragma unroll
+                    for (int r = 0; r < kNRows; ++r) {
+                        BC_val[r] = scale_C * static_cast<float>(C[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                    }
+                }
+            }
+            if constexpr (kIsVariableC) {
+                auto &smem_load_weight_C = !kIsVariableB ? smem_load_weight : smem_load_weight1;
+                load_weight<Ktraits>(Cvar + state_idx * params.C_dstate_stride, C_vals,
+                    smem_load_weight_C, (params.seqlen - chunk * kChunkSize));
+                if constexpr (!kIsVariableB) {
+                    #pragma unroll
+                    for (int r = 0; r < kNRows; ++r) {
+                        BC_val[r] = scale_B * static_cast<float>(B[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                    }
+                }
+            }
+            if constexpr (!kIsVariableB && !kIsVariableC) {
+                #pragma unroll
+                for (int r = 0; r < kNRows; ++r) {
+                    BC_val[r] = scale_B * static_cast<float>(B[state_idx * params.B_dstate_stride + r * params.B_d_stride])
+                        * scale_C * static_cast<float>(C[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                }
+            }
+
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                if (r > 0) { __syncthreads(); }
+                scan_t thread_data[kNItems];
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    thread_data[i] = make_float2(expf(delta_vals[r][i] * A_val[r]),
+                                                     !kIsVariableB ? delta_u_vals[r][i] :
+                                                        scale_B * static_cast<float>(B_vals[i]) * delta_u_vals[r][i]);
+                    if constexpr (!Ktraits::kIsEvenLen) {
+                        if (threadIdx.x * kNItems + i >= params.seqlen - chunk * kChunkSize) {
+                            thread_data[i] = make_float2(1.f, 0.f);
+                        }
+                    }
+                }
+                // Initialize running total
+                scan_t running_prefix;
+                running_prefix = chunk > 0 && threadIdx.x % 32 == 0 ? smem_running_prefix[state_idx + r * MAX_DSTATE] : make_float2(1.f, 0.f);
+                SSMScanPrefixCallbackOp<float> prefix_op(running_prefix);
+                Ktraits::BlockScanT(smem_scan).InclusiveScan(
+                    thread_data, thread_data, SSMScanOp<float>(), prefix_op
+                );
+                if (threadIdx.x == 0) {
+                    smem_running_prefix[state_idx] = prefix_op.running_prefix;
+                    int ssm_state = int(roundf(prefix_op.running_prefix.y / scale_ssm_state));
+                    x[(r * params.n_chunks + chunk) * params.dstate + state_idx] = ssm_state > 127 ? 127 : ssm_state < -128 ? -128 : static_cast<input_t>(ssm_state);
+                }
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    const float C_val = !kIsVariableC ? BC_val[r] :
+                                                (!kIsVariableB ? BC_val[r] * scale_C * static_cast<float>(C_vals[i]) :
+                                                    scale_C * static_cast<float>(C_vals[i]));
+                    out_vals[r][i] += thread_data[i].y * C_val;
+                }
+            }
+        }
+
+        // Output with optional z gating
+        at::Half *out = reinterpret_cast<at::Half *>(params.out_ptr) + batch_id * params.out_batch_stride
+            + dim_id * kNRows * params.out_d_stride + chunk * kChunkSize;
+        __syncthreads();
+
+        at::Half out_q_vals[kNRows][kNItems];
+        if constexpr (kHasZ) {
+            const float scale_z = *reinterpret_cast<float *>(params.scale_z_ptr);
+            input_t *z = reinterpret_cast<input_t *>(params.z_ptr) + batch_id * params.z_batch_stride
+                + dim_id * kNRows * params.z_d_stride + chunk * kChunkSize;
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                input_t z_vals_load[kNItems];
+                __syncthreads();
+                load_input<Ktraits>(z + r * params.z_d_stride, z_vals_load, smem_load, params.seqlen - chunk * kChunkSize);
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    float z_val = scale_z * static_cast<float>(z_vals_load[i]);
+                    out_q_vals[r][i] = __float2half(out_vals[r][i] * z_val / (1 + expf(-z_val)));
+                }
+                __syncthreads();
+                store_output<Ktraits>(out + r * params.out_d_stride, out_q_vals[r], smem_store, params.seqlen - chunk * kChunkSize);
+            }
+        } else {
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                if constexpr (!kDirectIO) {
+                    if (r > 0) { __syncthreads(); }
+                }
+                for (int i = 0; i < kNItems; ++i) {
+                    out_q_vals[r][i] = __float2half(out_vals[r][i]);
+                }
+                store_output<Ktraits>(out + r * params.out_d_stride, out_q_vals[r], smem_store, params.seqlen - chunk * kChunkSize);
+            }
+        }
+
+        Bvar += kChunkSize;
+        Cvar += kChunkSize;
+    }
+}
+
+template<int kNThreads, int kNItems, typename input_t, typename weight_t>
+void quant_sscan_fwd_launch_mode5(QuantSSMParams &params, cudaStream_t stream) {
+    constexpr int kNRows = 1;
+    BOOL_SWITCH(params.seqlen % (kNThreads * kNItems) == 0, kIsEvenLen, [&] {
+        BOOL_SWITCH(params.is_variable_B, kIsVariableB, [&] {
+            BOOL_SWITCH(params.is_variable_C, kIsVariableC, [&] {
+                BOOL_SWITCH(params.z_ptr != nullptr , kHasZ, [&] {
+                    using Ktraits = Quant_SScan_fwd_kernel_traits<kNThreads, kNItems, kNRows, kIsEvenLen, kIsVariableB, kIsVariableC, kHasZ, input_t, weight_t>;
+                    constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
+                    dim3 grid(params.batch, params.dim / kNRows);
+                    auto kernel = &quant_sscan_fwd_kernel_mode5<Ktraits>;
+                    if (kSmemSize >= 48 * 1024) {
+                        C10_CUDA_CHECK(cudaFuncSetAttribute(
+                            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+                    }
+                    kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                });
+            });
+        });
+    });
+}
+
+template<typename input_t, typename weight_t>
+void quant_sscan_fwd_cuda_mode5(QuantSSMParams &params, cudaStream_t stream) {
+    if (params.seqlen <= 128) {
+        quant_sscan_fwd_launch_mode5<32, 4, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 256) {
+        quant_sscan_fwd_launch_mode5<32, 8, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 512) {
+        quant_sscan_fwd_launch_mode5<32, 16, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 1024) {
+        quant_sscan_fwd_launch_mode5<64, 16, input_t, weight_t>(params, stream);
+    } else {
+        quant_sscan_fwd_launch_mode5<128, 16, input_t, weight_t>(params, stream);
+    }
+}
+/**************************************************/
+/*   Mode 6: quant_sscan_fwd_kernel_mode6         */
+/*   FP32 input u (skip INT8 dequantization)     */
+/*   Same implementation as Mode 5               */
+/**************************************************/
+
+template<typename Ktraits>
+__global__ __launch_bounds__(Ktraits::kNThreads, Ktraits::kMinBlocks)
+void quant_sscan_fwd_kernel_mode6(QuantSSMParams params) {
+    constexpr bool kIsVariableB = Ktraits::kIsVariableB;
+    constexpr bool kIsVariableC = Ktraits::kIsVariableC;
+    constexpr bool kHasZ = Ktraits::kHasZ;
+    constexpr int kNThreads = Ktraits::kNThreads;
+    constexpr int kNItems = Ktraits::kNItems;
+    constexpr int kNRows = Ktraits::kNRows;
+    constexpr bool kDirectIO = Ktraits::kDirectIO;
+    using input_t = typename Ktraits::input_t;
+    using weight_t = typename Ktraits::weight_t;
+    using scan_t = typename Ktraits::scan_t;
+
+    // Shared memory
+    extern __shared__ char smem_[];
+    auto& smem_load = reinterpret_cast<typename Ktraits::BlockLoadT::TempStorage&>(smem_);
+    auto& smem_load_weight = reinterpret_cast<typename Ktraits::BlockLoadWeightT::TempStorage&>(smem_);
+    auto& smem_load_weight1 = *reinterpret_cast<typename Ktraits::BlockLoadWeightT::TempStorage*>(smem_ + sizeof(typename Ktraits::BlockLoadWeightT::TempStorage));
+    auto& smem_store = reinterpret_cast<typename Ktraits::BlockStoreT::TempStorage&>(smem_);
+    auto& smem_scan = *reinterpret_cast<typename Ktraits::BlockScanT::TempStorage*>(smem_ + Ktraits::kSmemIOSize);
+    scan_t *smem_running_prefix = reinterpret_cast<scan_t *>(smem_ + Ktraits::kSmemSize);
+
+    const int batch_id = blockIdx.x;
+    const int dim_id = blockIdx.y;
+    const int group_id = dim_id / (params.dim_ngroups_ratio);
+
+    // Mode 6: u is float* instead of input_t*
+    float *u = reinterpret_cast<float *>(params.u_ptr) + batch_id * params.u_batch_stride
+        + dim_id * kNRows * params.u_d_stride;
+
+    input_t *delta = reinterpret_cast<input_t *>(params.delta_ptr) + batch_id * params.delta_batch_stride
+        + dim_id * kNRows * params.delta_d_stride;
+    weight_t *A = reinterpret_cast<weight_t *>(params.A_ptr) + dim_id * kNRows * params.A_d_stride;
+    weight_t *B = reinterpret_cast<weight_t *>(params.B_ptr) + dim_id * kNRows * params.B_d_stride;
+    input_t *Bvar = reinterpret_cast<input_t *>(params.B_ptr) + batch_id * params.B_batch_stride + group_id * params.B_group_stride;
+    weight_t *C = reinterpret_cast<weight_t *>(params.C_ptr) + dim_id * kNRows * params.C_d_stride;
+    input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;
+    input_t *x = reinterpret_cast<input_t *>(params.x_ptr) + (batch_id * params.dim + dim_id * kNRows) * params.n_chunks * params.dstate;
+
+    float D_val[kNRows] = {0};
+    if (params.D_ptr != nullptr) {
+        const float scale_D = *reinterpret_cast<float *>(params.scale_D_ptr);
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            weight_t D_load = reinterpret_cast<weight_t *>(params.D_ptr)[dim_id * kNRows + r];
+            D_val[r] = scale_D * static_cast<float>(D_load);
+        }
+    }
+
+    float delta_bias[kNRows] = {0};
+    if (params.delta_bias_ptr != nullptr) {
+        const float scale_delta_bias = *reinterpret_cast<float *>(params.scale_delta_bias_ptr);
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            weight_t delta_bias_load = reinterpret_cast<weight_t *>(params.delta_bias_ptr)[dim_id * kNRows + r];
+            delta_bias[r] = scale_delta_bias * static_cast<float>(delta_bias_load);
+        }
+    }
+
+    constexpr int kChunkSize = kNThreads * kNItems;
+    const float scale_delta = *reinterpret_cast<float *>(params.scale_delta_ptr);
+    const float scale_ssm_state = *reinterpret_cast<float *>(params.scale_ssm_state_ptr);
+    // Mode 6: scale_u not used (u is already FP32)
+    const float scale_A = *reinterpret_cast<float *>(params.scale_A_ptr);
+    const float scale_B = *reinterpret_cast<float *>(params.scale_B_ptr);
+    const float scale_C = *reinterpret_cast<float *>(params.scale_C_ptr);
+
+    for (int chunk = 0; chunk < params.n_chunks; ++chunk) {
+        // Mode 6: u_vals_load is float instead of input_t
+        float u_vals_load[kNRows][kNItems];
+        input_t delta_vals_load[kNRows][kNItems];
+
+        __syncthreads();
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            if constexpr (!kDirectIO) {
+                if (r > 0) { __syncthreads(); }
+            }
+            // Mode 6: Load FP32 u directly (no shared memory block load for FP32)
+            load_input_fp32_direct<kNThreads, kNItems, kDirectIO>(u + r * params.u_d_stride, u_vals_load[r], params.seqlen - chunk * kChunkSize);
+            if constexpr (!kDirectIO) { __syncthreads(); }
+            load_input<Ktraits>(delta + r * params.delta_d_stride, delta_vals_load[r], smem_load, params.seqlen - chunk * kChunkSize);
+        }
+        u += kChunkSize;
+        delta += kChunkSize;
+
+        float delta_vals[kNRows][kNItems], delta_u_vals[kNRows][kNItems], out_vals[kNRows][kNItems];
+        #pragma unroll
+        for (int r = 0; r < kNRows; ++r) {
+            #pragma unroll
+            for (int i = 0; i < kNItems; ++i) {
+                // Mode 6: u_val is already FP32, no dequantization needed
+                float u_val = u_vals_load[r][i];
+                delta_vals[r][i] = scale_delta * static_cast<float>(delta_vals_load[r][i]) + delta_bias[r];
+                if (params.delta_softplus) {
+                    delta_vals[r][i] = delta_vals[r][i] <= 20.f ? log1pf(expf(delta_vals[r][i])) : delta_vals[r][i];
+                }
+                delta_u_vals[r][i] = delta_vals[r][i] * u_val;
+                out_vals[r][i] = D_val[r] * u_val;
+            }
+        }
+
+        // SSM state space computation (same as Mode 0)
+        __syncthreads();
+        for (int state_idx = 0; state_idx < params.dstate; ++state_idx) {
+            float A_val[kNRows];
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                A_val[r] = -expf(scale_A * static_cast<float>(A[state_idx * params.A_dstate_stride + r * params.A_d_stride]));
+            }
+
+            float BC_val[kNRows];
+            weight_t B_vals[kNItems], C_vals[kNItems];  // Fixed: kNItems not kNRows
+            if constexpr (kIsVariableB) {
+                load_weight<Ktraits>(Bvar + state_idx * params.B_dstate_stride, B_vals,
+                    smem_load_weight, (params.seqlen - chunk * kChunkSize));
+                if constexpr (!kIsVariableC) {
+                    #pragma unroll
+                    for (int r = 0; r < kNRows; ++r) {
+                        BC_val[r] = scale_C * static_cast<float>(C[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                    }
+                }
+            }
+            if constexpr (kIsVariableC) {
+                auto &smem_load_weight_C = !kIsVariableB ? smem_load_weight : smem_load_weight1;
+                load_weight<Ktraits>(Cvar + state_idx * params.C_dstate_stride, C_vals,
+                    smem_load_weight_C, (params.seqlen - chunk * kChunkSize));
+                if constexpr (!kIsVariableB) {
+                    #pragma unroll
+                    for (int r = 0; r < kNRows; ++r) {
+                        BC_val[r] = scale_B * static_cast<float>(B[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                    }
+                }
+            }
+            if constexpr (!kIsVariableB && !kIsVariableC) {
+                #pragma unroll
+                for (int r = 0; r < kNRows; ++r) {
+                    BC_val[r] = scale_B * static_cast<float>(B[state_idx * params.B_dstate_stride + r * params.B_d_stride])
+                        * scale_C * static_cast<float>(C[state_idx * params.C_dstate_stride + r * params.C_d_stride]);
+                }
+            }
+
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                if (r > 0) { __syncthreads(); }
+                scan_t thread_data[kNItems];
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    thread_data[i] = make_float2(expf(delta_vals[r][i] * A_val[r]),
+                                                     !kIsVariableB ? delta_u_vals[r][i] :
+                                                        scale_B * static_cast<float>(B_vals[i]) * delta_u_vals[r][i]);
+                    if constexpr (!Ktraits::kIsEvenLen) {
+                        if (threadIdx.x * kNItems + i >= params.seqlen - chunk * kChunkSize) {
+                            thread_data[i] = make_float2(1.f, 0.f);
+                        }
+                    }
+                }
+                // Initialize running total
+                scan_t running_prefix;
+                running_prefix = chunk > 0 && threadIdx.x % 32 == 0 ? smem_running_prefix[state_idx + r * MAX_DSTATE] : make_float2(1.f, 0.f);
+                SSMScanPrefixCallbackOp<float> prefix_op(running_prefix);
+                Ktraits::BlockScanT(smem_scan).InclusiveScan(
+                    thread_data, thread_data, SSMScanOp<float>(), prefix_op
+                );
+                if (threadIdx.x == 0) {
+                    smem_running_prefix[state_idx] = prefix_op.running_prefix;
+                    int ssm_state = int(roundf(prefix_op.running_prefix.y / scale_ssm_state));
+                    x[(r * params.n_chunks + chunk) * params.dstate + state_idx] = ssm_state > 127 ? 127 : ssm_state < -128 ? -128 : static_cast<input_t>(ssm_state);
+                }
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    const float C_val = !kIsVariableC ? BC_val[r] :
+                                                (!kIsVariableB ? BC_val[r] * scale_C * static_cast<float>(C_vals[i]) :
+                                                    scale_C * static_cast<float>(C_vals[i]));
+                    out_vals[r][i] += thread_data[i].y * C_val;
+                }
+            }
+        }
+
+        // Output with optional z gating
+        at::Half *out = reinterpret_cast<at::Half *>(params.out_ptr) + batch_id * params.out_batch_stride
+            + dim_id * kNRows * params.out_d_stride + chunk * kChunkSize;
+        __syncthreads();
+
+        at::Half out_q_vals[kNRows][kNItems];
+        if constexpr (kHasZ) {
+            const float scale_z = *reinterpret_cast<float *>(params.scale_z_ptr);
+            input_t *z = reinterpret_cast<input_t *>(params.z_ptr) + batch_id * params.z_batch_stride
+                + dim_id * kNRows * params.z_d_stride + chunk * kChunkSize;
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                input_t z_vals_load[kNItems];
+                __syncthreads();
+                load_input<Ktraits>(z + r * params.z_d_stride, z_vals_load, smem_load, params.seqlen - chunk * kChunkSize);
+                #pragma unroll
+                for (int i = 0; i < kNItems; ++i) {
+                    float z_val = scale_z * static_cast<float>(z_vals_load[i]);
+                    out_q_vals[r][i] = __float2half(out_vals[r][i] * z_val / (1 + expf(-z_val)));
+                }
+                __syncthreads();
+                store_output<Ktraits>(out + r * params.out_d_stride, out_q_vals[r], smem_store, params.seqlen - chunk * kChunkSize);
+            }
+        } else {
+            #pragma unroll
+            for (int r = 0; r < kNRows; ++r) {
+                if constexpr (!kDirectIO) {
+                    if (r > 0) { __syncthreads(); }
+                }
+                for (int i = 0; i < kNItems; ++i) {
+                    out_q_vals[r][i] = __float2half(out_vals[r][i]);
+                }
+                store_output<Ktraits>(out + r * params.out_d_stride, out_q_vals[r], smem_store, params.seqlen - chunk * kChunkSize);
+            }
+        }
+
+        Bvar += kChunkSize;
+        Cvar += kChunkSize;
+    }
+}
+
+template<int kNThreads, int kNItems, typename input_t, typename weight_t>
+void quant_sscan_fwd_launch_mode6(QuantSSMParams &params, cudaStream_t stream) {
+    constexpr int kNRows = 1;
+    BOOL_SWITCH(params.seqlen % (kNThreads * kNItems) == 0, kIsEvenLen, [&] {
+        BOOL_SWITCH(params.is_variable_B, kIsVariableB, [&] {
+            BOOL_SWITCH(params.is_variable_C, kIsVariableC, [&] {
+                BOOL_SWITCH(params.z_ptr != nullptr , kHasZ, [&] {
+                    using Ktraits = Quant_SScan_fwd_kernel_traits<kNThreads, kNItems, kNRows, kIsEvenLen, kIsVariableB, kIsVariableC, kHasZ, input_t, weight_t>;
+                    constexpr int kSmemSize = Ktraits::kSmemSize + kNRows * MAX_DSTATE * sizeof(typename Ktraits::scan_t);
+                    dim3 grid(params.batch, params.dim / kNRows);
+                    auto kernel = &quant_sscan_fwd_kernel_mode6<Ktraits>;
+                    if (kSmemSize >= 48 * 1024) {
+                        C10_CUDA_CHECK(cudaFuncSetAttribute(
+                            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSmemSize));
+                    }
+                    kernel<<<grid, Ktraits::kNThreads, kSmemSize, stream>>>(params);
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                });
+            });
+        });
+    });
+}
+
+template<typename input_t, typename weight_t>
+void quant_sscan_fwd_cuda_mode6(QuantSSMParams &params, cudaStream_t stream) {
+    if (params.seqlen <= 128) {
+        quant_sscan_fwd_launch_mode6<32, 4, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 256) {
+        quant_sscan_fwd_launch_mode6<32, 8, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 512) {
+        quant_sscan_fwd_launch_mode6<32, 16, input_t, weight_t>(params, stream);
+    } else if (params.seqlen <= 1024) {
+        quant_sscan_fwd_launch_mode6<64, 16, input_t, weight_t>(params, stream);
+    } else {
+        quant_sscan_fwd_launch_mode6<128, 16, input_t, weight_t>(params, stream);
+    }
+}

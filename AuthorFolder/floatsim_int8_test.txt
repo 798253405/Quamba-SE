@@ -1,0 +1,376 @@
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/selective_scan_interface.py:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/selective_scan_interface.py:240: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/layer_norm.py:986: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/layer_norm.py:1045: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout, *args):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/distributed/tensor_parallel.py:26: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, x, weight, bias, process_group=None, sequence_parallel=True):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/distributed/tensor_parallel.py:62: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, grad_output):
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/ssd_combined.py:817: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  def forward(ctx, zxbcdt, conv1d_weight, conv1d_bias, dt_bias, A, D, chunk_size, initial_states=None, seq_idx=None, dt_limit=(0.0, float("inf")), return_final_states=False, activation="silu",
+/usr/local/lib/python3.10/dist-packages/mamba_ssm/ops/triton/ssd_combined.py:895: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  def backward(ctx, dout, *args):
+/usr/local/lib/python3.10/dist-packages/torch/backends/__init__.py:46: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:80.)
+  self.setter(val)
+2025-11-07:20:00:53,505 INFO     [main.py:18] Creating Model:quamba-130m-w8a8
+2025-11-07:20:00:53,505 INFO     [main.py:51] Enabled FLOAT_SIM_ASIC_INT8 mode (verification)
+2025-11-07:20:00:56,516 INFO     [main.py:86] Evaluating result using lm_eval (quantized), task(s): ['lambada_openai']
+2025-11-07:20:00:56,541 INFO     [huggingface.py:162] Using device 'cuda'
+`torch_dtype` is deprecated! Use `dtype` instead!
+2025-11-07:20:01:02,861 INFO     [evaluator.py:131] Setting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234
+2025-11-07:20:01:04,917 WARNING  [task.py:322] [Task: lambada_openai] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2025-11-07:20:01:04,917 WARNING  [task.py:322] [Task: lambada_openai] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2025-11-07:20:01:05,028 WARNING  [evaluator.py:222] Overwriting default num_fewshot of lambada_openai from None to 0
+2025-11-07:20:01:05,029 INFO     [task.py:395] Building contexts for lambada_openai on rank 0...
+
+================================================================================
+[Main Debug] Parser arguments for three modes:
+  args.fp32_ssm_input = False
+  args.float_sim_asic_int8 = True
+  args.float_sim_asic_research_se = False
+================================================================================
+
+  0%|          | 0/5153 [00:00<?, ?it/s]  1%|          | 58/5153 [00:00<00:08, 574.11it/s]  2%|▏         | 116/5153 [00:00<00:08, 574.50it/s]  3%|▎         | 174/5153 [00:00<00:08, 575.71it/s]  5%|▍         | 232/5153 [00:00<00:08, 576.76it/s]  6%|▌         | 290/5153 [00:00<00:08, 576.94it/s]  7%|▋         | 350/5153 [00:00<00:08, 582.42it/s]  8%|▊         | 411/5153 [00:00<00:08, 589.97it/s]  9%|▉         | 472/5153 [00:00<00:07, 594.88it/s] 10%|█         | 533/5153 [00:00<00:07, 598.50it/s] 12%|█▏        | 594/5153 [00:01<00:07, 601.48it/s] 13%|█▎        | 655/5153 [00:01<00:07, 602.89it/s] 14%|█▍        | 716/5153 [00:01<00:07, 604.04it/s] 15%|█▌        | 777/5153 [00:01<00:07, 605.48it/s] 16%|█▋        | 838/5153 [00:01<00:07, 606.37it/s] 17%|█▋        | 899/5153 [00:01<00:07, 606.83it/s] 19%|█▊        | 960/5153 [00:01<00:06, 607.48it/s] 20%|█▉        | 1021/5153 [00:01<00:06, 604.57it/s] 21%|██        | 1082/5153 [00:01<00:06, 606.13it/s] 22%|██▏       | 1143/5153 [00:01<00:06, 607.17it/s] 23%|██▎       | 1205/5153 [00:02<00:06, 608.16it/s] 25%|██▍       | 1266/5153 [00:02<00:06, 608.17it/s] 26%|██▌       | 1327/5153 [00:02<00:06, 607.46it/s] 27%|██▋       | 1388/5153 [00:02<00:06, 607.89it/s] 28%|██▊       | 1450/5153 [00:02<00:06, 608.79it/s] 29%|██▉       | 1511/5153 [00:02<00:05, 609.11it/s] 31%|███       | 1573/5153 [00:02<00:05, 609.47it/s] 32%|███▏      | 1634/5153 [00:02<00:05, 608.64it/s] 33%|███▎      | 1695/5153 [00:02<00:05, 608.89it/s] 34%|███▍      | 1756/5153 [00:02<00:05, 608.51it/s] 35%|███▌      | 1818/5153 [00:03<00:05, 609.21it/s] 36%|███▋      | 1879/5153 [00:03<00:05, 608.64it/s] 38%|███▊      | 1941/5153 [00:03<00:05, 609.08it/s] 39%|███▉      | 2003/5153 [00:03<00:05, 609.41it/s] 40%|████      | 2064/5153 [00:03<00:05, 609.23it/s] 41%|████▏     | 2126/5153 [00:03<00:04, 610.10it/s] 42%|████▏     | 2188/5153 [00:03<00:04, 609.58it/s] 44%|████▎     | 2249/5153 [00:03<00:04, 607.39it/s] 45%|████▍     | 2310/5153 [00:03<00:04, 606.95it/s] 46%|████▌     | 2371/5153 [00:03<00:04, 607.83it/s] 47%|████▋     | 2433/5153 [00:04<00:04, 608.81it/s] 48%|████▊     | 2494/5153 [00:04<00:04, 608.67it/s] 50%|████▉     | 2556/5153 [00:04<00:04, 609.62it/s] 51%|█████     | 2618/5153 [00:04<00:04, 610.13it/s] 52%|█████▏    | 2680/5153 [00:04<00:04, 610.37it/s] 53%|█████▎    | 2742/5153 [00:04<00:03, 610.55it/s] 54%|█████▍    | 2804/5153 [00:04<00:03, 610.96it/s] 56%|█████▌    | 2866/5153 [00:04<00:03, 611.21it/s] 57%|█████▋    | 2928/5153 [00:04<00:03, 611.30it/s] 58%|█████▊    | 2990/5153 [00:04<00:03, 610.70it/s] 59%|█████▉    | 3052/5153 [00:05<00:03, 610.19it/s] 60%|██████    | 3114/5153 [00:05<00:03, 609.75it/s] 62%|██████▏   | 3175/5153 [00:05<00:03, 609.57it/s] 63%|██████▎   | 3237/5153 [00:05<00:03, 610.10it/s] 64%|██████▍   | 3299/5153 [00:05<00:03, 610.06it/s] 65%|██████▌   | 3361/5153 [00:05<00:02, 609.58it/s] 66%|██████▋   | 3423/5153 [00:05<00:02, 609.94it/s] 68%|██████▊   | 3484/5153 [00:05<00:02, 607.67it/s] 69%|██████▉   | 3545/5153 [00:05<00:02, 607.30it/s] 70%|██████▉   | 3606/5153 [00:05<00:02, 607.48it/s] 71%|███████   | 3667/5153 [00:06<00:02, 608.05it/s] 72%|███████▏  | 3728/5153 [00:06<00:02, 607.41it/s] 74%|███████▎  | 3790/5153 [00:06<00:02, 608.39it/s] 75%|███████▍  | 3852/5153 [00:06<00:02, 609.60it/s] 76%|███████▌  | 3914/5153 [00:06<00:02, 609.95it/s] 77%|███████▋  | 3976/5153 [00:06<00:01, 610.48it/s] 78%|███████▊  | 4038/5153 [00:06<00:01, 610.52it/s] 80%|███████▉  | 4100/5153 [00:06<00:01, 610.64it/s] 81%|████████  | 4162/5153 [00:06<00:01, 611.17it/s] 82%|████████▏ | 4224/5153 [00:06<00:01, 611.13it/s] 83%|████████▎ | 4286/5153 [00:07<00:01, 611.23it/s] 84%|████████▍ | 4348/5153 [00:07<00:01, 609.44it/s] 86%|████████▌ | 4409/5153 [00:07<00:01, 609.56it/s] 87%|████████▋ | 4470/5153 [00:07<00:01, 609.37it/s] 88%|████████▊ | 4531/5153 [00:07<00:01, 608.80it/s] 89%|████████▉ | 4592/5153 [00:07<00:00, 608.69it/s] 90%|█████████ | 4653/5153 [00:07<00:00, 608.58it/s] 91%|█████████▏| 4714/5153 [00:07<00:00, 607.39it/s] 93%|█████████▎| 4775/5153 [00:07<00:00, 605.01it/s] 94%|█████████▍| 4836/5153 [00:07<00:00, 605.31it/s] 95%|█████████▌| 4897/5153 [00:08<00:00, 605.33it/s] 96%|█████████▌| 4958/5153 [00:08<00:00, 605.48it/s] 97%|█████████▋| 5019/5153 [00:08<00:00, 606.22it/s] 99%|█████████▊| 5080/5153 [00:08<00:00, 606.77it/s]100%|█████████▉| 5141/5153 [00:08<00:00, 607.55it/s]100%|██████████| 5153/5153 [00:08<00:00, 606.47it/s]
+2025-11-07:20:01:13,610 INFO     [evaluator.py:362] Running loglikelihood requests
+Running loglikelihood requests:   0%|          | 0/5153 [00:00<?, ?it/s]Running loglikelihood requests:   0%|          | 1/5153 [00:04<6:13:22,  4.35s/it]
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+
+================================================================================
+[Layer 23 Call #1] After Conv1D
+  x dtype: torch.float32, shape: torch.Size([16, 1536, 223])
+  First 10 values (high precision):
+    x[0] = -0.072973936796
+    x[1] = 0.012162323110
+    x[2] = -0.012162323110
+    x[3] = -0.012162323110
+    x[4] = -0.085136264563
+    x[5] = -0.109460905194
+    x[6] = -0.024324646220
+    x[7] = 0.000000000000
+    x[8] = 0.000000000000
+    x[9] = -0.012162323110
+
+  === Layer 23 All Scales ===
+  in_proj scales:
+  conv1d scales:
+    input_scale: 0.1019287109
+    weight_scale: 0.0085906982
+    bias_scale: 0.0150451660
+    output_scale: 0.0121623231
+  x_proj scales:
+  selective_scan scales:
+    u_scale: 0.0121623231
+    dt_scale: 0.0847778320
+  out_proj scales:
+  After dt_proj: dt dtype: torch.int8, first 3: [-6, 0, -5]
+  B dtype: torch.int8, first 3: [-10, -2, -4]
+  C dtype: torch.int8, first 3: [1, 1, 0]
+  z dtype: torch.int8, first 3: [-2, -2, -3]
+
+[QSScan Debug] Environment variables:
+  FP32_SSM_INPUT = false
+  FLOAT_SIM_ASIC_INT8 = true
+  FLOAT_SIM_ASIC_RESEARCH_SE = false
+  Parsed values: fp32=False, int8_sim=True, se=False
+  u dtype: torch.float32, dt dtype: torch.int8
+  Will use FP32 SSM: True
+
+  After SSM: y dtype: torch.float16, first 3: [0.032501220703125, 0.00402069091796875, 0.0]
+  After had: y dtype: torch.int8, first 3: [-5, 4, 0]
+  After out_proj: out dtype: torch.float16, first 3: [-14.109375, -0.56689453125, 2.505859375]
+================================================================================
+
+
+================================================================================
+[Layer 23 Call #2] After Conv1D
+  x dtype: torch.float32, shape: torch.Size([16, 1536, 136])
+  First 10 values (high precision):
+    x[0] = -0.072973936796
+    x[1] = -0.012162323110
+    x[2] = -0.048649292439
+    x[3] = -0.097298584878
+    x[4] = -0.036486968398
+    x[5] = 0.060811616480
+    x[6] = -0.036486968398
+    x[7] = -0.036486968398
+    x[8] = -0.060811616480
+    x[9] = -0.097298584878
+  After dt_proj: dt dtype: torch.int8, first 3: [-2, 0, -1]
+  B dtype: torch.int8, first 3: [-7, -10, -11]
+  C dtype: torch.int8, first 3: [-1, 7, 9]
+  z dtype: torch.int8, first 3: [0, -4, 0]
+Running loglikelihood requests:   0%|          | 17/5153 [00:04<18:09,  4.71it/s] Running loglikelihood requests:   1%|          | 33/5153 [00:05<09:02,  9.43it/s]Running loglikelihood requests:   1%|          | 49/5153 [00:05<06:01, 14.14it/s]Running loglikelihood requests:   1%|▏         | 65/5153 [00:06<04:32, 18.66it/s]Running loglikelihood requests:   2%|▏         | 81/5153 [00:06<03:42, 22.77it/s]Running loglikelihood requests:   2%|▏         | 97/5153 [00:07<03:11, 26.41it/s]Running loglikelihood requests:   2%|▏         | 113/5153 [00:07<02:51, 29.39it/s]Running loglikelihood requests:   3%|▎         | 129/5153 [00:07<02:37, 31.88it/s]Running loglikelihood requests:   3%|▎         | 145/5153 [00:08<02:27, 33.88it/s]Running loglikelihood requests:   3%|▎         | 161/5153 [00:08<02:20, 35.44it/s]Running loglikelihood requests:   3%|▎         | 177/5153 [00:09<02:15, 36.71it/s]Running loglikelihood requests:   4%|▎         | 193/5153 [00:09<02:11, 37.73it/s]Running loglikelihood requests:   4%|▍         | 209/5153 [00:09<02:07, 38.66it/s]Running loglikelihood requests:   4%|▍         | 225/5153 [00:10<02:05, 39.41it/s]Running loglikelihood requests:   5%|▍         | 241/5153 [00:10<02:02, 39.99it/s]Running loglikelihood requests:   5%|▍         | 257/5153 [00:11<02:01, 40.38it/s]Running loglikelihood requests:   5%|▌         | 273/5153 [00:11<01:59, 40.70it/s]Running loglikelihood requests:   6%|▌         | 289/5153 [00:11<01:58, 41.13it/s]Running loglikelihood requests:   6%|▌         | 305/5153 [00:12<01:57, 41.42it/s]Running loglikelihood requests:   6%|▌         | 321/5153 [00:12<01:55, 41.72it/s]Running loglikelihood requests:   7%|▋         | 337/5153 [00:12<01:54, 41.94it/s]Running loglikelihood requests:   7%|▋         | 353/5153 [00:13<01:53, 42.16it/s]Running loglikelihood requests:   7%|▋         | 369/5153 [00:13<01:52, 42.43it/s]Running loglikelihood requests:   7%|▋         | 386/5153 [00:14<01:49, 43.43it/s]Running loglikelihood requests:   8%|▊         | 402/5153 [00:14<01:49, 43.36it/s]Running loglikelihood requests:   8%|▊         | 418/5153 [00:14<01:49, 43.31it/s]Running loglikelihood requests:   8%|▊         | 434/5153 [00:15<01:48, 43.50it/s]Running loglikelihood requests:   9%|▊         | 450/5153 [00:15<01:48, 43.43it/s]Running loglikelihood requests:   9%|▉         | 466/5153 [00:15<01:47, 43.53it/s]Running loglikelihood requests:   9%|▉         | 482/5153 [00:16<01:46, 43.73it/s]Running loglikelihood requests:  10%|▉         | 498/5153 [00:16<01:46, 43.80it/s]Running loglikelihood requests:  10%|▉         | 514/5153 [00:16<01:45, 43.90it/s]Running loglikelihood requests:  10%|█         | 530/5153 [00:17<01:45, 43.81it/s]Running loglikelihood requests:  11%|█         | 546/5153 [00:17<01:44, 43.89it/s]Running loglikelihood requests:  11%|█         | 562/5153 [00:18<01:44, 44.02it/s]Running loglikelihood requests:  11%|█         | 578/5153 [00:18<01:43, 44.07it/s]Running loglikelihood requests:  12%|█▏        | 594/5153 [00:18<01:43, 44.09it/s]Running loglikelihood requests:  12%|█▏        | 610/5153 [00:19<01:42, 44.34it/s]Running loglikelihood requests:  12%|█▏        | 626/5153 [00:19<01:42, 44.35it/s]Running loglikelihood requests:  12%|█▏        | 642/5153 [00:19<01:41, 44.50it/s]Running loglikelihood requests:  13%|█▎        | 658/5153 [00:20<01:40, 44.73it/s]Running loglikelihood requests:  13%|█▎        | 674/5153 [00:20<01:39, 44.93it/s]Running loglikelihood requests:  13%|█▎        | 690/5153 [00:20<01:39, 45.08it/s]Running loglikelihood requests:  14%|█▎        | 706/5153 [00:21<01:38, 45.13it/s]Running loglikelihood requests:  14%|█▍        | 722/5153 [00:21<01:38, 45.21it/s]Running loglikelihood requests:  14%|█▍        | 738/5153 [00:21<01:37, 45.35it/s]Running loglikelihood requests:  15%|█▍        | 754/5153 [00:22<01:36, 45.45it/s]Running loglikelihood requests:  15%|█▍        | 770/5153 [00:22<01:36, 45.59it/s]Running loglikelihood requests:  15%|█▌        | 786/5153 [00:23<01:35, 45.83it/s]Running loglikelihood requests:  16%|█▌        | 802/5153 [00:23<01:34, 45.85it/s]Running loglikelihood requests:  16%|█▌        | 818/5153 [00:23<01:34, 45.80it/s]Running loglikelihood requests:  16%|█▌        | 834/5153 [00:24<01:34, 45.84it/s]Running loglikelihood requests:  16%|█▋        | 850/5153 [00:24<01:33, 45.89it/s]Running loglikelihood requests:  17%|█▋        | 866/5153 [00:24<01:32, 46.20it/s]Running loglikelihood requests:  17%|█▋        | 882/5153 [00:25<01:32, 46.42it/s]Running loglikelihood requests:  17%|█▋        | 898/5153 [00:25<01:31, 46.45it/s]Running loglikelihood requests:  18%|█▊        | 914/5153 [00:25<01:31, 46.34it/s]Running loglikelihood requests:  18%|█▊        | 930/5153 [00:26<01:30, 46.41it/s]Running loglikelihood requests:  18%|█▊        | 946/5153 [00:26<01:30, 46.39it/s]Running loglikelihood requests:  19%|█▊        | 962/5153 [00:26<01:29, 46.70it/s]Running loglikelihood requests:  19%|█▉        | 978/5153 [00:27<01:28, 46.92it/s]Running loglikelihood requests:  19%|█▉        | 994/5153 [00:27<01:28, 46.91it/s]Running loglikelihood requests:  20%|█▉        | 1010/5153 [00:27<01:28, 46.83it/s]Running loglikelihood requests:  20%|█▉        | 1026/5153 [00:28<01:28, 46.90it/s]Running loglikelihood requests:  20%|██        | 1042/5153 [00:28<01:27, 47.00it/s]Running loglikelihood requests:  21%|██        | 1058/5153 [00:28<01:26, 47.12it/s]Running loglikelihood requests:  21%|██        | 1074/5153 [00:29<01:26, 47.23it/s]Running loglikelihood requests:  21%|██        | 1090/5153 [00:29<01:25, 47.28it/s]Running loglikelihood requests:  21%|██▏       | 1106/5153 [00:29<01:25, 47.33it/s]Running loglikelihood requests:  22%|██▏       | 1122/5153 [00:30<01:25, 47.41it/s]Running loglikelihood requests:  22%|██▏       | 1138/5153 [00:30<01:24, 47.38it/s]Running loglikelihood requests:  22%|██▏       | 1154/5153 [00:30<01:24, 47.50it/s]Running loglikelihood requests:  23%|██▎       | 1170/5153 [00:31<01:23, 47.60it/s]Running loglikelihood requests:  23%|██▎       | 1186/5153 [00:31<01:23, 47.68it/s]Running loglikelihood requests:  23%|██▎       | 1202/5153 [00:31<01:22, 47.67it/s]Running loglikelihood requests:  24%|██▎       | 1218/5153 [00:32<01:22, 47.72it/s]Running loglikelihood requests:  24%|██▍       | 1234/5153 [00:32<01:22, 47.71it/s]Running loglikelihood requests:  24%|██▍       | 1250/5153 [00:32<01:21, 47.69it/s]Running loglikelihood requests:  25%|██▍       | 1266/5153 [00:33<01:21, 47.87it/s]Running loglikelihood requests:  25%|██▍       | 1282/5153 [00:33<01:20, 47.94it/s]Running loglikelihood requests:  25%|██▌       | 1298/5153 [00:33<01:20, 47.92it/s]Running loglikelihood requests:  25%|██▌       | 1314/5153 [00:34<01:19, 48.01it/s]Running loglikelihood requests:  26%|██▌       | 1330/5153 [00:34<01:19, 48.03it/s]Running loglikelihood requests:  26%|██▌       | 1346/5153 [00:34<01:19, 48.07it/s]Running loglikelihood requests:  26%|██▋       | 1362/5153 [00:35<01:18, 48.09it/s]Running loglikelihood requests:  27%|██▋       | 1378/5153 [00:35<01:18, 48.27it/s]Running loglikelihood requests:  27%|██▋       | 1394/5153 [00:35<01:17, 48.32it/s]Running loglikelihood requests:  27%|██▋       | 1410/5153 [00:36<01:17, 48.51it/s]Running loglikelihood requests:  28%|██▊       | 1426/5153 [00:36<01:16, 48.62it/s]Running loglikelihood requests:  28%|██▊       | 1442/5153 [00:36<01:16, 48.78it/s]Running loglikelihood requests:  28%|██▊       | 1458/5153 [00:37<01:15, 48.89it/s]Running loglikelihood requests:  29%|██▊       | 1474/5153 [00:37<01:15, 48.92it/s]Running loglikelihood requests:  29%|██▉       | 1490/5153 [00:37<01:15, 48.84it/s]Running loglikelihood requests:  29%|██▉       | 1506/5153 [00:38<01:14, 48.97it/s]Running loglikelihood requests:  30%|██▉       | 1522/5153 [00:38<01:13, 49.08it/s]Running loglikelihood requests:  30%|██▉       | 1538/5153 [00:38<01:13, 49.18it/s]Running loglikelihood requests:  30%|███       | 1554/5153 [00:39<01:13, 49.27it/s]Running loglikelihood requests:  30%|███       | 1570/5153 [00:39<01:12, 49.30it/s]Running loglikelihood requests:  31%|███       | 1586/5153 [00:39<01:12, 49.45it/s]Running loglikelihood requests:  31%|███       | 1602/5153 [00:40<01:11, 49.46it/s]Running loglikelihood requests:  31%|███▏      | 1618/5153 [00:40<01:11, 49.53it/s]Running loglikelihood requests:  32%|███▏      | 1634/5153 [00:40<01:10, 49.77it/s]Running loglikelihood requests:  32%|███▏      | 1650/5153 [00:41<01:10, 49.96it/s]Running loglikelihood requests:  32%|███▏      | 1666/5153 [00:41<01:09, 50.01it/s]Running loglikelihood requests:  33%|███▎      | 1682/5153 [00:41<01:09, 50.05it/s]Running loglikelihood requests:  33%|███▎      | 1698/5153 [00:42<01:09, 50.01it/s]Running loglikelihood requests:  33%|███▎      | 1714/5153 [00:42<01:08, 49.98it/s]Running loglikelihood requests:  34%|███▎      | 1730/5153 [00:42<01:08, 49.91it/s]Running loglikelihood requests:  34%|███▍      | 1746/5153 [00:42<01:08, 49.92it/s]Running loglikelihood requests:  34%|███▍      | 1762/5153 [00:43<01:07, 49.90it/s]Running loglikelihood requests:  35%|███▍      | 1778/5153 [00:43<01:07, 49.96it/s]Running loglikelihood requests:  35%|███▍      | 1794/5153 [00:43<01:07, 49.99it/s]Running loglikelihood requests:  35%|███▌      | 1810/5153 [00:44<01:06, 49.97it/s]Running loglikelihood requests:  35%|███▌      | 1826/5153 [00:44<01:06, 50.13it/s]Running loglikelihood requests:  36%|███▌      | 1842/5153 [00:44<01:05, 50.25it/s]Running loglikelihood requests:  36%|███▌      | 1858/5153 [00:45<01:05, 50.31it/s]Running loglikelihood requests:  36%|███▋      | 1874/5153 [00:45<01:05, 50.41it/s]Running loglikelihood requests:  37%|███▋      | 1890/5153 [00:45<01:04, 50.54it/s]Running loglikelihood requests:  37%|███▋      | 1906/5153 [00:46<01:04, 50.45it/s]Running loglikelihood requests:  37%|███▋      | 1922/5153 [00:46<01:04, 50.41it/s]Running loglikelihood requests:  38%|███▊      | 1938/5153 [00:46<01:03, 50.39it/s]Running loglikelihood requests:  38%|███▊      | 1954/5153 [00:47<01:03, 50.35it/s]Running loglikelihood requests:  38%|███▊      | 1970/5153 [00:47<01:02, 50.54it/s]Running loglikelihood requests:  39%|███▊      | 1986/5153 [00:47<01:02, 50.73it/s]Running loglikelihood requests:  39%|███▉      | 2002/5153 [00:48<01:01, 50.87it/s]Running loglikelihood requests:  39%|███▉      | 2018/5153 [00:48<01:01, 50.85it/s]Running loglikelihood requests:  39%|███▉      | 2034/5153 [00:48<01:01, 50.97it/s]Running loglikelihood requests:  40%|███▉      | 2050/5153 [00:48<01:00, 51.08it/s]Running loglikelihood requests:  40%|████      | 2066/5153 [00:49<01:00, 51.09it/s]Running loglikelihood requests:  40%|████      | 2082/5153 [00:49<01:00, 51.07it/s]Running loglikelihood requests:  41%|████      | 2098/5153 [00:49<00:59, 51.04it/s]Running loglikelihood requests:  41%|████      | 2114/5153 [00:50<00:59, 50.92it/s]Running loglikelihood requests:  41%|████▏     | 2130/5153 [00:50<00:59, 51.14it/s]Running loglikelihood requests:  42%|████▏     | 2146/5153 [00:50<00:58, 51.35it/s]Running loglikelihood requests:  42%|████▏     | 2162/5153 [00:51<00:58, 51.53it/s]Running loglikelihood requests:  42%|████▏     | 2178/5153 [00:51<00:57, 51.54it/s]Running loglikelihood requests:  43%|████▎     | 2194/5153 [00:51<00:57, 51.50it/s]Running loglikelihood requests:  43%|████▎     | 2210/5153 [00:52<00:57, 51.45it/s]Running loglikelihood requests:  43%|████▎     | 2226/5153 [00:52<00:56, 51.39it/s]Running loglikelihood requests:  44%|████▎     | 2242/5153 [00:52<00:56, 51.46it/s]Running loglikelihood requests:  44%|████▍     | 2258/5153 [00:53<00:56, 51.56it/s]Running loglikelihood requests:  44%|████▍     | 2274/5153 [00:53<00:55, 51.53it/s]Running loglikelihood requests:  44%|████▍     | 2290/5153 [00:53<00:55, 51.74it/s]Running loglikelihood requests:  45%|████▍     | 2306/5153 [00:53<00:54, 51.88it/s]Running loglikelihood requests:  45%|████▌     | 2322/5153 [00:54<00:54, 51.83it/s]Running loglikelihood requests:  45%|████▌     | 2338/5153 [00:54<00:54, 51.94it/s]Running loglikelihood requests:  46%|████▌     | 2354/5153 [00:54<00:53, 52.04it/s]Running loglikelihood requests:  46%|████▌     | 2370/5153 [00:55<00:53, 52.12it/s]Running loglikelihood requests:  46%|████▋     | 2386/5153 [00:55<00:53, 52.14it/s]Running loglikelihood requests:  47%|████▋     | 2402/5153 [00:55<00:52, 52.16it/s]Running loglikelihood requests:  47%|████▋     | 2418/5153 [00:56<00:52, 52.19it/s]Running loglikelihood requests:  47%|████▋     | 2434/5153 [00:56<00:52, 52.03it/s]Running loglikelihood requests:  48%|████▊     | 2450/5153 [00:56<00:51, 52.01it/s]Running loglikelihood requests:  48%|████▊     | 2466/5153 [00:57<00:51, 52.26it/s]Running loglikelihood requests:  48%|████▊     | 2482/5153 [00:57<00:51, 52.36it/s]Running loglikelihood requests:  48%|████▊     | 2498/5153 [00:57<00:50, 52.47it/s]Running loglikelihood requests:  49%|████▉     | 2514/5153 [00:57<00:50, 52.53it/s]Running loglikelihood requests:  49%|████▉     | 2530/5153 [00:58<00:49, 52.60it/s]Running loglikelihood requests:  49%|████▉     | 2546/5153 [00:58<00:49, 52.57it/s]Running loglikelihood requests:  50%|████▉     | 2562/5153 [00:58<00:49, 52.60it/s]Running loglikelihood requests:  50%|█████     | 2578/5153 [00:59<00:48, 52.64it/s]Running loglikelihood requests:  50%|█████     | 2594/5153 [00:59<00:48, 52.73it/s]Running loglikelihood requests:  51%|█████     | 2610/5153 [00:59<00:48, 52.91it/s]Running loglikelihood requests:  51%|█████     | 2626/5153 [01:00<00:47, 53.05it/s]Running loglikelihood requests:  51%|█████▏    | 2642/5153 [01:00<00:47, 52.90it/s]Running loglikelihood requests:  52%|█████▏    | 2658/5153 [01:00<00:47, 52.96it/s]Running loglikelihood requests:  52%|█████▏    | 2674/5153 [01:00<00:46, 53.00it/s]Running loglikelihood requests:  52%|█████▏    | 2690/5153 [01:01<00:46, 53.05it/s]Running loglikelihood requests:  53%|█████▎    | 2706/5153 [01:01<00:46, 53.04it/s]Running loglikelihood requests:  53%|█████▎    | 2722/5153 [01:01<00:45, 53.10it/s]Running loglikelihood requests:  53%|█████▎    | 2738/5153 [01:02<00:45, 53.08it/s]Running loglikelihood requests:  53%|█████▎    | 2754/5153 [01:02<00:45, 52.95it/s]Running loglikelihood requests:  54%|█████▍    | 2770/5153 [01:02<00:45, 52.90it/s]Running loglikelihood requests:  54%|█████▍    | 2786/5153 [01:03<00:44, 52.93it/s]Running loglikelihood requests:  54%|█████▍    | 2802/5153 [01:03<00:44, 52.99it/s]Running loglikelihood requests:  55%|█████▍    | 2818/5153 [01:03<00:44, 53.05it/s]Running loglikelihood requests:  55%|█████▍    | 2834/5153 [01:03<00:43, 53.23it/s]Running loglikelihood requests:  55%|█████▌    | 2850/5153 [01:04<00:43, 53.35it/s]Running loglikelihood requests:  56%|█████▌    | 2866/5153 [01:04<00:43, 53.12it/s]Running loglikelihood requests:  56%|█████▌    | 2882/5153 [01:04<00:42, 53.32it/s]Running loglikelihood requests:  56%|█████▌    | 2898/5153 [01:05<00:42, 53.55it/s]Running loglikelihood requests:  57%|█████▋    | 2914/5153 [01:05<00:41, 53.70it/s]Running loglikelihood requests:  57%|█████▋    | 2930/5153 [01:05<00:41, 53.90it/s]Running loglikelihood requests:  57%|█████▋    | 2946/5153 [01:06<00:40, 54.05it/s]Running loglikelihood requests:  57%|█████▋    | 2962/5153 [01:06<00:40, 54.00it/s]Running loglikelihood requests:  58%|█████▊    | 2978/5153 [01:06<00:40, 53.87it/s]Running loglikelihood requests:  58%|█████▊    | 2994/5153 [01:06<00:40, 53.89it/s]Running loglikelihood requests:  58%|█████▊    | 3010/5153 [01:07<00:39, 53.97it/s]Running loglikelihood requests:  59%|█████▊    | 3026/5153 [01:07<00:39, 53.92it/s]Running loglikelihood requests:  59%|█████▉    | 3042/5153 [01:07<00:39, 53.94it/s]Running loglikelihood requests:  59%|█████▉    | 3058/5153 [01:08<00:38, 53.93it/s]Running loglikelihood requests:  60%|█████▉    | 3074/5153 [01:08<00:38, 53.78it/s]Running loglikelihood requests:  60%|█████▉    | 3090/5153 [01:08<00:38, 53.83it/s]Running loglikelihood requests:  60%|██████    | 3106/5153 [01:09<00:37, 53.93it/s]Running loglikelihood requests:  61%|██████    | 3122/5153 [01:09<00:37, 53.99it/s]Running loglikelihood requests:  61%|██████    | 3138/5153 [01:09<00:37, 54.11it/s]Running loglikelihood requests:  61%|██████    | 3154/5153 [01:09<00:36, 54.20it/s]Running loglikelihood requests:  62%|██████▏   | 3170/5153 [01:10<00:36, 54.26it/s]Running loglikelihood requests:  62%|██████▏   | 3187/5153 [01:10<00:35, 55.16it/s]Running loglikelihood requests:  62%|██████▏   | 3203/5153 [01:10<00:35, 54.76it/s]Running loglikelihood requests:  62%|██████▏   | 3219/5153 [01:11<00:35, 54.64it/s]Running loglikelihood requests:  63%|██████▎   | 3235/5153 [01:11<00:35, 54.55it/s]Running loglikelihood requests:  63%|██████▎   | 3251/5153 [01:11<00:34, 54.41it/s]Running loglikelihood requests:  63%|██████▎   | 3267/5153 [01:11<00:34, 54.34it/s]Running loglikelihood requests:  64%|██████▎   | 3283/5153 [01:12<00:34, 54.27it/s]Running loglikelihood requests:  64%|██████▍   | 3299/5153 [01:12<00:34, 54.39it/s]Running loglikelihood requests:  64%|██████▍   | 3315/5153 [01:12<00:33, 54.62it/s]Running loglikelihood requests:  65%|██████▍   | 3331/5153 [01:13<00:33, 54.86it/s]Running loglikelihood requests:  65%|██████▍   | 3347/5153 [01:13<00:32, 55.04it/s]Running loglikelihood requests:  65%|██████▌   | 3363/5153 [01:13<00:32, 55.19it/s]Running loglikelihood requests:  66%|██████▌   | 3379/5153 [01:13<00:32, 55.20it/s]Running loglikelihood requests:  66%|██████▌   | 3395/5153 [01:14<00:31, 55.21it/s]Running loglikelihood requests:  66%|██████▌   | 3411/5153 [01:14<00:31, 55.06it/s]Running loglikelihood requests:  67%|██████▋   | 3427/5153 [01:14<00:31, 55.01it/s]Running loglikelihood requests:  67%|██████▋   | 3443/5153 [01:15<00:31, 55.06it/s]Running loglikelihood requests:  67%|██████▋   | 3459/5153 [01:15<00:30, 55.04it/s]Running loglikelihood requests:  67%|██████▋   | 3475/5153 [01:15<00:30, 55.01it/s]Running loglikelihood requests:  68%|██████▊   | 3491/5153 [01:16<00:30, 55.20it/s]Running loglikelihood requests:  68%|██████▊   | 3507/5153 [01:16<00:29, 55.49it/s]Running loglikelihood requests:  68%|██████▊   | 3523/5153 [01:16<00:29, 55.51it/s]Running loglikelihood requests:  69%|██████▊   | 3539/5153 [01:16<00:29, 55.48it/s]Running loglikelihood requests:  69%|██████▉   | 3555/5153 [01:17<00:28, 55.53it/s]Running loglikelihood requests:  69%|██████▉   | 3571/5153 [01:17<00:28, 55.55it/s]Running loglikelihood requests:  70%|██████▉   | 3587/5153 [01:17<00:28, 55.57it/s]Running loglikelihood requests:  70%|██████▉   | 3603/5153 [01:18<00:27, 55.68it/s]Running loglikelihood requests:  70%|███████   | 3619/5153 [01:18<00:27, 55.72it/s]Running loglikelihood requests:  71%|███████   | 3635/5153 [01:18<00:27, 55.68it/s]Running loglikelihood requests:  71%|███████   | 3651/5153 [01:18<00:27, 55.57it/s]Running loglikelihood requests:  71%|███████   | 3667/5153 [01:19<00:26, 55.58it/s]Running loglikelihood requests:  71%|███████▏  | 3683/5153 [01:19<00:26, 55.80it/s]Running loglikelihood requests:  72%|███████▏  | 3699/5153 [01:19<00:26, 55.90it/s]Running loglikelihood requests:  72%|███████▏  | 3715/5153 [01:20<00:25, 56.09it/s]Running loglikelihood requests:  72%|███████▏  | 3731/5153 [01:20<00:25, 56.20it/s]Running loglikelihood requests:  73%|███████▎  | 3747/5153 [01:20<00:25, 56.23it/s]Running loglikelihood requests:  73%|███████▎  | 3763/5153 [01:20<00:24, 56.09it/s]Running loglikelihood requests:  73%|███████▎  | 3779/5153 [01:21<00:24, 56.24it/s]Running loglikelihood requests:  74%|███████▎  | 3795/5153 [01:21<00:24, 56.21it/s]Running loglikelihood requests:  74%|███████▍  | 3811/5153 [01:21<00:23, 56.33it/s]Running loglikelihood requests:  74%|███████▍  | 3827/5153 [01:22<00:23, 56.37it/s]Running loglikelihood requests:  75%|███████▍  | 3843/5153 [01:22<00:23, 56.37it/s]Running loglikelihood requests:  75%|███████▍  | 3859/5153 [01:22<00:22, 56.28it/s]Running loglikelihood requests:  75%|███████▌  | 3875/5153 [01:22<00:22, 56.15it/s]Running loglikelihood requests:  76%|███████▌  | 3891/5153 [01:23<00:22, 56.36it/s]Running loglikelihood requests:  76%|███████▌  | 3907/5153 [01:23<00:22, 56.46it/s]Running loglikelihood requests:  76%|███████▌  | 3923/5153 [01:23<00:21, 56.68it/s]Running loglikelihood requests:  76%|███████▋  | 3939/5153 [01:24<00:21, 56.87it/s]Running loglikelihood requests:  77%|███████▋  | 3955/5153 [01:24<00:21, 57.01it/s]Running loglikelihood requests:  77%|███████▋  | 3971/5153 [01:24<00:20, 56.88it/s]Running loglikelihood requests:  77%|███████▋  | 3987/5153 [01:24<00:20, 56.80it/s]Running loglikelihood requests:  78%|███████▊  | 4003/5153 [01:25<00:20, 56.85it/s]Running loglikelihood requests:  78%|███████▊  | 4019/5153 [01:25<00:19, 56.87it/s]Running loglikelihood requests:  78%|███████▊  | 4035/5153 [01:25<00:19, 56.92it/s]Running loglikelihood requests:  79%|███████▊  | 4051/5153 [01:25<00:19, 56.96it/s]Running loglikelihood requests:  79%|███████▉  | 4067/5153 [01:26<00:19, 57.07it/s]Running loglikelihood requests:  79%|███████▉  | 4083/5153 [01:26<00:18, 56.95it/s]Running loglikelihood requests:  80%|███████▉  | 4099/5153 [01:26<00:18, 57.16it/s]Running loglikelihood requests:  80%|███████▉  | 4115/5153 [01:27<00:18, 57.20it/s]Running loglikelihood requests:  80%|████████  | 4131/5153 [01:27<00:17, 57.35it/s]Running loglikelihood requests:  80%|████████  | 4147/5153 [01:27<00:17, 57.45it/s]Running loglikelihood requests:  81%|████████  | 4163/5153 [01:27<00:17, 57.59it/s]Running loglikelihood requests:  81%|████████  | 4179/5153 [01:28<00:16, 57.67it/s]Running loglikelihood requests:  81%|████████▏ | 4195/5153 [01:28<00:16, 57.64it/s]Running loglikelihood requests:  82%|████████▏ | 4211/5153 [01:28<00:16, 57.80it/s]Running loglikelihood requests:  82%|████████▏ | 4227/5153 [01:29<00:16, 57.71it/s]Running loglikelihood requests:  82%|████████▏ | 4243/5153 [01:29<00:15, 57.60it/s]Running loglikelihood requests:  83%|████████▎ | 4259/5153 [01:29<00:15, 57.59it/s]Running loglikelihood requests:  83%|████████▎ | 4275/5153 [01:29<00:15, 57.85it/s]Running loglikelihood requests:  83%|████████▎ | 4291/5153 [01:30<00:14, 58.09it/s]Running loglikelihood requests:  84%|████████▎ | 4307/5153 [01:30<00:14, 58.19it/s]Running loglikelihood requests:  84%|████████▍ | 4323/5153 [01:30<00:14, 58.43it/s]Running loglikelihood requests:  84%|████████▍ | 4339/5153 [01:30<00:13, 58.54it/s]Running loglikelihood requests:  85%|████████▍ | 4355/5153 [01:31<00:13, 58.50it/s]Running loglikelihood requests:  85%|████████▍ | 4371/5153 [01:31<00:13, 58.39it/s]Running loglikelihood requests:  85%|████████▌ | 4387/5153 [01:31<00:13, 58.50it/s]Running loglikelihood requests:  85%|████████▌ | 4403/5153 [01:32<00:12, 58.59it/s]Running loglikelihood requests:  86%|████████▌ | 4419/5153 [01:32<00:12, 58.57it/s]Running loglikelihood requests:  86%|████████▌ | 4435/5153 [01:32<00:12, 58.46it/s]Running loglikelihood requests:  86%|████████▋ | 4451/5153 [01:32<00:11, 58.62it/s]Running loglikelihood requests:  87%|████████▋ | 4467/5153 [01:33<00:11, 58.58it/s]Running loglikelihood requests:  87%|████████▋ | 4483/5153 [01:33<00:11, 58.57it/s]Running loglikelihood requests:  87%|████████▋ | 4499/5153 [01:33<00:11, 58.72it/s]Running loglikelihood requests:  88%|████████▊ | 4515/5153 [01:33<00:10, 58.82it/s]Running loglikelihood requests:  88%|████████▊ | 4531/5153 [01:34<00:10, 58.88it/s]Running loglikelihood requests:  88%|████████▊ | 4547/5153 [01:34<00:10, 58.80it/s]Running loglikelihood requests:  89%|████████▊ | 4563/5153 [01:34<00:10, 58.86it/s]Running loglikelihood requests:  89%|████████▉ | 4579/5153 [01:35<00:09, 58.82it/s]Running loglikelihood requests:  89%|████████▉ | 4595/5153 [01:35<00:09, 58.78it/s]Running loglikelihood requests:  89%|████████▉ | 4611/5153 [01:35<00:09, 58.81it/s]Running loglikelihood requests:  90%|████████▉ | 4627/5153 [01:35<00:08, 59.23it/s]Running loglikelihood requests:  90%|█████████ | 4643/5153 [01:36<00:08, 59.45it/s]Running loglikelihood requests:  90%|█████████ | 4659/5153 [01:36<00:08, 59.42it/s]Running loglikelihood requests:  91%|█████████ | 4675/5153 [01:36<00:08, 59.56it/s]Running loglikelihood requests:  91%|█████████ | 4691/5153 [01:36<00:07, 59.66it/s]Running loglikelihood requests:  91%|█████████▏| 4707/5153 [01:37<00:07, 59.59it/s]Running loglikelihood requests:  92%|█████████▏| 4723/5153 [01:37<00:07, 59.53it/s]Running loglikelihood requests:  92%|█████████▏| 4739/5153 [01:37<00:06, 59.65it/s]Running loglikelihood requests:  92%|█████████▏| 4755/5153 [01:37<00:06, 59.74it/s]Running loglikelihood requests:  93%|█████████▎| 4771/5153 [01:38<00:06, 60.03it/s]Running loglikelihood requests:  93%|█████████▎| 4787/5153 [01:38<00:06, 60.09it/s]Running loglikelihood requests:  93%|█████████▎| 4803/5153 [01:38<00:05, 60.31it/s]Running loglikelihood requests:  94%|█████████▎| 4819/5153 [01:39<00:05, 60.48it/s]Running loglikelihood requests:  94%|█████████▍| 4835/5153 [01:39<00:05, 60.36it/s]Running loglikelihood requests:  94%|█████████▍| 4851/5153 [01:39<00:05, 60.24it/s]Running loglikelihood requests:  94%|█████████▍| 4867/5153 [01:39<00:04, 60.27it/s]Running loglikelihood requests:  95%|█████████▍| 4883/5153 [01:40<00:04, 60.69it/s]Running loglikelihood requests:  95%|█████████▌| 4899/5153 [01:40<00:04, 60.91it/s]Running loglikelihood requests:  95%|█████████▌| 4915/5153 [01:40<00:03, 61.03it/s]Running loglikelihood requests:  96%|█████████▌| 4931/5153 [01:40<00:03, 61.26it/s]Running loglikelihood requests:  96%|█████████▌| 4947/5153 [01:41<00:03, 61.31it/s]Running loglikelihood requests:  96%|█████████▋| 4963/5153 [01:41<00:03, 61.05it/s]Running loglikelihood requests:  97%|█████████▋| 4979/5153 [01:41<00:02, 61.35it/s]Running loglikelihood requests:  97%|█████████▋| 4995/5153 [01:41<00:02, 61.55it/s]Running loglikelihood requests:  97%|█████████▋| 5011/5153 [01:42<00:02, 61.69it/s]Running loglikelihood requests:  98%|█████████▊| 5027/5153 [01:42<00:02, 61.97it/s]Running loglikelihood requests:  98%|█████████▊| 5043/5153 [01:42<00:01, 62.15it/s]Running loglikelihood requests:  98%|█████████▊| 5059/5153 [01:42<00:01, 62.32it/s]Running loglikelihood requests:  98%|█████████▊| 5075/5153 [01:43<00:01, 62.33it/s]Running loglikelihood requests:  99%|█████████▉| 5091/5153 [01:43<00:00, 62.53it/s]Running loglikelihood requests:  99%|█████████▉| 5107/5153 [01:43<00:00, 62.86it/s]Running loglikelihood requests:  99%|█████████▉| 5123/5153 [01:43<00:00, 62.77it/s]Running loglikelihood requests: 100%|█████████▉| 5139/5153 [01:44<00:00, 62.63it/s]Running loglikelihood requests: 100%|██████████| 5153/5153 [01:44<00:00, 49.44it/s]
+  After SSM: y dtype: torch.float16, first 3: [-0.0, 0.042022705078125, 0.01004791259765625]
+  After had: y dtype: torch.int8, first 3: [-5, 4, 4]
+  After out_proj: out dtype: torch.float16, first 3: [1.056640625, -0.7783203125, -5.859375]
+================================================================================
+
+
+================================================================================
+[Layer 23 Call #3] After Conv1D
+  x dtype: torch.float32, shape: torch.Size([16, 1536, 124])
+  First 10 values (high precision):
+    x[0] = -0.060811616480
+    x[1] = 0.024324646220
+    x[2] = -0.036486968398
+    x[3] = 0.085136264563
+    x[4] = -0.072973936796
+    x[5] = -0.048649292439
+    x[6] = -0.048649292439
+    x[7] = -0.097298584878
+    x[8] = -0.145947873592
+    x[9] = -0.097298584878
+  After dt_proj: dt dtype: torch.int8, first 3: [1, 0, 3]
+  B dtype: torch.int8, first 3: [-10, -6, -11]
+  C dtype: torch.int8, first 3: [4, 4, 7]
+  z dtype: torch.int8, first 3: [4, -5, -6]
+  After SSM: y dtype: torch.float16, first 3: [-0.306884765625, -0.01145172119140625, 0.16259765625]
+  After had: y dtype: torch.int8, first 3: [4, -7, -9]
+  After out_proj: out dtype: torch.float16, first 3: [-22.921875, -1.3037109375, 18.078125]
+================================================================================
+
+bootstrapping for stddev: perplexity
+  0%|          | 0/100 [00:00<?, ?it/s]  1%|          | 1/100 [00:01<02:09,  1.31s/it]  4%|▍         | 4/100 [00:01<00:30,  3.12it/s] 13%|█▎        | 13/100 [00:02<00:13,  6.23it/s] 19%|█▉        | 19/100 [00:02<00:08,  9.79it/s] 23%|██▎       | 23/100 [00:02<00:06, 12.37it/s] 26%|██▌       | 26/100 [00:03<00:10,  7.29it/s] 28%|██▊       | 28/100 [00:04<00:09,  7.56it/s] 35%|███▌      | 35/100 [00:04<00:05, 12.51it/s] 38%|███▊      | 38/100 [00:05<00:08,  7.26it/s] 44%|████▍     | 44/100 [00:05<00:05, 10.98it/s] 47%|████▋     | 47/100 [00:05<00:05, 10.27it/s] 50%|█████     | 50/100 [00:06<00:06,  7.48it/s] 52%|█████▏    | 52/100 [00:06<00:05,  8.18it/s] 58%|█████▊    | 58/100 [00:06<00:03, 11.26it/s] 60%|██████    | 60/100 [00:07<00:03, 11.58it/s] 62%|██████▏   | 62/100 [00:07<00:05,  6.96it/s] 66%|██████▌   | 66/100 [00:08<00:03,  8.68it/s] 70%|███████   | 70/100 [00:08<00:02, 11.17it/s] 72%|███████▏  | 72/100 [00:08<00:02,  9.75it/s] 74%|███████▍  | 74/100 [00:09<00:03,  6.85it/s] 77%|███████▋  | 77/100 [00:09<00:02,  8.84it/s] 80%|████████  | 80/100 [00:09<00:01, 11.33it/s] 82%|████████▏ | 82/100 [00:09<00:01, 11.94it/s] 84%|████████▍ | 84/100 [00:09<00:01, 10.12it/s] 86%|████████▌ | 86/100 [00:10<00:02,  6.38it/s] 89%|████████▉ | 89/100 [00:10<00:01,  8.32it/s] 92%|█████████▏| 92/100 [00:10<00:00,  9.60it/s] 97%|█████████▋| 97/100 [00:11<00:00, 11.61it/s]100%|██████████| 100/100 [00:11<00:00,  8.95it/s]
+fatal: detected dubious ownership in repository at '/workspace/Quamba'
+To add an exception for this directory, call:
+
+	git config --global --add safe.directory /workspace/Quamba
+2025-11-07:20:03:12,914 INFO     [lm_eval_wrapper.py:121] 0-shot evaluation results: 
+|    Tasks     |Version|Filter|n-shot|  Metric  | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|------:|---|-----:|
+|lambada_openai|      1|none  |     0|perplexity|21.9646|±  |0.7293|
+|              |       |none  |     0|acc       | 0.4000|±  |0.0068|
+
+2025-11-07:20:03:12,915 INFO     [main.py:129] Saving result to logs_floatsim_int8/quamba-130m-w8a8.json
+2025-11-07:20:03:12,915 INFO     [percentile_logger.py:138] ✅ Percentile实验日志已保存到: percentileRangeResults/experiments.jsonl
+
+================================================================================
+📊 Percentile实验摘要
+================================================================================
+
+🔧 配置:
+  模型: quamba-130m-w8a8
+  量化: W8A8
+  Percentile Alpha: None
+  Group Heads: False
+
+🎯 最终结果:
+  Accuracy: 40.00%
+  Perplexity: 21.965
+
+================================================================================
+
+
+================================================================================
+  python3 main.py quamba-130m-w8a8 --quantize --batch_size 16 --eval_zero_shot --task_list lambada_openai --log_dir logs_floatsim_int8 --float-sim-asic-int8 --pretrained_dir pretrained_models/quamba1/default
+================================================================================
+

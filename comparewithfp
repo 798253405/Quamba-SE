@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# ============================================================================
+# 简化的对比脚本 - 对比指定mode与FP32参考
+# Usage: ./comparewithfp <mode>
+# Example: ./comparewithfp 2-1
+# ============================================================================
+
+if [ $# -eq 0 ]; then
+    echo "Usage: ./comparewithfp <mode>"
+    echo ""
+    echo "Available modes: 0, 2-0, 2-1, 2-2, 2-3, 2-4, 3"
+    echo ""
+    echo "Example:"
+    echo "  ./comparewithfp 2-1"
+    echo ""
+    exit 1
+fi
+
+MODE=$1
+OUTPUT_DIR="layer_outputs"
+REFERENCE="fp32"
+
+# Check if reference exists
+if [ ! -f "${OUTPUT_DIR}/mode_${REFERENCE}_stats.json" ]; then
+    echo "❌ Error: FP32 reference not found in ${OUTPUT_DIR}/"
+    echo ""
+    echo "Please save FP32 reference first:"
+    echo "  python3 save_layer_outputs.py quamba-130m-w8a8 \\"
+    echo "    --pretrained_dir pretrained_models/Quamba1-pa9999/pa-0.9999 \\"
+    echo "    --mode fp32 \\"
+    echo "    --output_dir ${OUTPUT_DIR}"
+    echo ""
+    echo "Or use the batch script:"
+    echo "  ./save_all_modes.sh fp_only"
+    exit 1
+fi
+
+# Check if mode data exists
+if [ ! -f "${OUTPUT_DIR}/mode_${MODE}_stats.json" ]; then
+    echo "❌ Error: Mode ${MODE} data not found in ${OUTPUT_DIR}/"
+    echo ""
+    echo "Please save mode ${MODE} first:"
+    echo "  python3 save_layer_outputs.py quamba-130m-w8a8 \\"
+    echo "    --pretrained_dir pretrained_models/Quamba1-pa9999/pa-0.9999 \\"
+    echo "    --mode ${MODE} \\"
+    echo "    --quantize \\"
+    echo "    --output_dir ${OUTPUT_DIR}"
+    echo ""
+    echo "Or use the batch script:"
+    echo "  ./save_all_modes.sh ${MODE}"
+    exit 1
+fi
+
+# Run comparison
+python3 compare_with_fp.py ${MODE} \
+    --reference ${REFERENCE} \
+    --output_dir ${OUTPUT_DIR}
