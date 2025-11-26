@@ -48,6 +48,28 @@ def main(args):
         elif args.mode == '6':
             model.forward = model.forward_mode6
 
+    # For Mode 5-0/5-1/5-2/5-3/5-4, use single-path eval forward (no intermediate stats printing)
+    if args.mode in ['5-0', '5-1', '5-2', '5-3', '5-4']:
+        forward_method_name = f'forward_mode{args.mode.replace("-", "_")}_eval'
+        if not hasattr(model, forward_method_name):
+            logging.error(f"Model does not support Mode {args.mode}. Please ensure the model has {forward_method_name} method.")
+            raise NotImplementedError(f"Mode {args.mode} not implemented for this model")
+
+        logging.info(f"Using Mode {args.mode} single-path eval forward method (no intermediate stats)")
+        model._original_forward = model.forward
+        model.forward = getattr(model, forward_method_name)
+
+    # For Mode 6-0/6-1/6-2/6-3/6-4, use FP32 x_proj forward (F.linear, consistent with SSM)
+    if args.mode in ['6-0', '6-1', '6-2', '6-3', '6-4']:
+        forward_method_name = f'forward_mode{args.mode.replace("-", "_")}_eval'
+        if not hasattr(model, forward_method_name):
+            logging.error(f"Model does not support Mode {args.mode}. Please ensure the model has {forward_method_name} method.")
+            raise NotImplementedError(f"Mode {args.mode} not implemented for this model")
+
+        logging.info(f"Using Mode {args.mode} FP32 x_proj forward method (F.linear, SSM-x_proj consistent)")
+        model._original_forward = model.forward
+        model.forward = getattr(model, forward_method_name)
+
     if args.quantize:
         """
         Start evaluating Quantized Models from here

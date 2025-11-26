@@ -96,10 +96,60 @@ MODE_CONFIG = {
         'env': {},
         'description': 'Conv1D: FP32 output, SSM: FP32 input, dual-path comparison with Mode 0'
     },
+    '5-0': {
+        'name': 'Mode 5-0 Virtual INT8 Eval',
+        'env': {},
+        'description': 'Virtual INT8: Conv1D FP32→Virtual INT8 grid, x_proj INT8, SSM via fwd_mode5 (should match Mode 0)'
+    },
+    '5-1': {
+        'name': 'Mode 5-1 FP32 Eval',
+        'env': {},
+        'description': 'Single path: FP32 no quantization, for eval without stats printing'
+    },
+    '5-2': {
+        'name': 'Mode 5-2 VirtualQuant+Outlier Eval',
+        'env': {},
+        'description': 'Single path: Virtual quantization + Outlier protection, for eval without stats printing'
+    },
+    '5-3': {
+        'name': 'Mode 5-3 Dual-Scale INT8 Eval',
+        'env': {},
+        'description': 'Single path: Dual-scale INT8 (normal: 1x scale, outlier: 2x scale), for eval without stats printing'
+    },
+    '5-4': {
+        'name': 'Mode 5-4 QuarterScale 4x Precision Eval',
+        'env': {},
+        'description': 'Single path: QuarterScale (small |q|<32 uses scale/4 for 4x precision), x_proj INT8 (same as 5-0)'
+    },
     '6': {
         'name': 'Dual-Path Mode 6',
         'env': {},
         'description': 'Conv1D: FP32 output (feeds both paths), SSM: FP32 input, dual-path comparison'
+    },
+    '6-0': {
+        'name': 'Mode 6-0 INT8+FP32_x_proj Eval',
+        'env': {},
+        'description': 'Single path: Conv1D INT8, x_proj FP32 (dequant), SSM INT8 - x_proj uses F.linear'
+    },
+    '6-1': {
+        'name': 'Mode 6-1 FP32+FP32_x_proj Eval',
+        'env': {},
+        'description': 'Single path: Full FP32, x_proj FP32 (dequant) - SSM and x_proj use identical FP32 values'
+    },
+    '6-2': {
+        'name': 'Mode 6-2 VirtualQuant+FP32_x_proj Eval',
+        'env': {},
+        'description': 'Single path: VirtualQuant+Outlier, x_proj FP32 (dequant) - SSM and x_proj use identical mixed values'
+    },
+    '6-3': {
+        'name': 'Mode 6-3 HalfScale 2x Precision Eval',
+        'env': {},
+        'description': 'Single path: HalfScale for small values (|q|<64 uses scale/2 for 2x precision), x_proj FP32'
+    },
+    '6-4': {
+        'name': 'Mode 6-4 CalibratedDualScale+FP32_x_proj Eval',
+        'env': {},
+        'description': 'Single path: Calibrated DualScale INT8 (outlier uses α=1.0 scale), x_proj FP32 (dequant)'
     }
 }
 
@@ -194,8 +244,22 @@ def _get_conv1d_kernel_name(mode: str) -> str:
 
     if mode == '5':
         return "quant_causal_conv1d_cuda.fwd_mode5 (CUDA FP32 output, dual-path)"
+    elif mode == '5-0':
+        return "quant_causal_conv1d_cuda.fwd_mode5 → Virtual INT8 (CUDA FP32 → INT8 grid)"
+    elif mode == '5-1':
+        return "quant_causal_conv1d_cuda.fwd_mode5 (CUDA FP32 output, single-path for eval)"
+    elif mode == '5-2':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + VirtualQuant (CUDA FP32 + INT8 grid + outlier)"
+    elif mode == '5-3':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + DualScale (CUDA FP32 + dual INT8 grid)"
+    elif mode == '5-4':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + QuarterScale (CUDA FP32 + scale/4 for small values)"
+    elif mode == '6-3':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + HalfScale (CUDA FP32 + scale/2 for small values)"
     elif mode == '6':
         return "quant_causal_conv1d_cuda.fwd_mode6 (CUDA FP32 output, dual-path)"
+    elif mode == '6-4':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + CalibratedDualScale (CUDA FP32 + α=1.0 outlier scale)"
     elif env.get('CONV1D_MODE4_SELECTIVE_GRID') == 'true':
         return "PyTorch F.conv1d (Selective Grid: FP32 for overflow, INT8 grid for normal)"
     elif env.get('CONV1D_MODE24_FP32') == 'true':
@@ -217,8 +281,22 @@ def _get_ssm_kernel_name(mode: str) -> str:
 
     if mode == '5':
         return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input, dual-path)"
+    elif mode == '5-0':
+        return "quant_sscan_cuda.fwd (CUDA INT8 kernel, single-path for eval)"
+    elif mode == '5-1':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input, single-path for eval)"
+    elif mode == '5-2':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from VirtualQuant+Outlier)"
+    elif mode == '5-3':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from DualScale INT8)"
+    elif mode == '5-4':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from QuarterScale with 4x precision for small values)"
+    elif mode == '6-3':
+        return "mamba_ssm selective_scan_fn (FP32 input from HalfScale mixed values)"
     elif mode == '6':
         return "quant_sscan_cuda.fwd_mode6 (CUDA FP32 input, dual-path)"
+    elif mode == '6-4':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from CalibratedDualScale INT8 with α=1.0 outlier scale)"
     elif env.get('CONV1D_MODE4_SELECTIVE_GRID') == 'true' or env.get('CONV1D_MODE24_FP32') == 'true':
         return "PyTorch (FP32 simulation, no CUDA kernel)"
     elif env.get('SSM_USE_CUDA_FOR_FP32') == 'true':

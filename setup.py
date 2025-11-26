@@ -246,6 +246,7 @@ ext_modules.append(
         sources=[
             "csrc/causal_conv1d/quant_causal_conv1d.cpp",
             "csrc/causal_conv1d/quant_causal_conv1d_fwd.cu",
+            "csrc/causal_conv1d/quant_causal_conv1d_fwd_fp32.cu",
             "csrc/causal_conv1d/quant_causal_conv1d_update.cu",
         ],
         extra_compile_args={

@@ -130,7 +130,7 @@ def get_quantize_options(parser):
     # Quamba mode selection (unified interface)
     parser.add_argument(
         '--mode', type=str, default='0',
-        choices=['0', '2-0', '2-1', '2-2', '2-3', '2-4', '3', '4', '5', '6'],
+        choices=['0', '2-0', '2-1', '2-2', '2-3', '2-4', '3', '4', '5', '5-0', '5-1', '5-2', '5-3', '5-4', '6', '6-0', '6-1', '6-2', '6-3', '6-4'],
         help='Quamba quantization mode: '
         '0 (Baseline INT8 CUDA), '
         '2-0 (CUDA INT8 + Requantization), '
@@ -140,7 +140,10 @@ def get_quantize_options(parser):
         '2-4 (TRUE FP32 Conv + FP32 SSM), '
         '3 (Hybrid Precision), '
         '4 (Selective Grid FP32), '
-        '5 (Dual-Path: FP32 Conv/SSM vs Mode 0), '
+        '5 (Three-Path comparison with stats), '
+        '5-0 (Single path: INT8 for eval), '
+        '5-1 (Single path: FP32 for eval), '
+        '5-2 (Single path: VirtualQuant+Outlier for eval), '
         '6 (Dual-Path: Shared FP32 input comparison)'
     )
 

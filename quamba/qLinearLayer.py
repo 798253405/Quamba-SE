@@ -649,6 +649,59 @@ class W8A8B8O8Linear(torch.nn.Module):
     def __repr__(self):
         return f"W8A8B8O8Linear(in_features={self.in_features}, out_features={self.out_features})"
 
+    @torch.no_grad()
+    def forward_mode6(self, x):
+        """
+        Mode 6 专用：FP32 输入，使用 F.linear (和原版 mamba 一致)
+        - Dequant INT8 权重到 FP32
+        - 使用 PyTorch F.linear 做矩阵乘法
+        - 这样 x_proj 可以接受 FP32 输入（包括 outlier），避免 INT8 GEMM 的 clamp
+        """
+        x_shape = x.shape
+        x = x.view(-1, x_shape[-1])
+
+        # Dequant INT8 weight to FP32
+        # self.weight: (in_features, out_features+pad), INT8, stride=(1, in_features)
+        # self.b: weight_scale
+        weight_fp32 = self.weight.float() * self.b.item()  # (in, out+pad)
+
+        # Remove padding
+        if self.pad_out != 0:
+            weight_fp32 = weight_fp32[:, :-self.pad_out]  # (in, out)
+
+        # F.linear expects weight shape (out, in), so transpose
+        # weight_fp32 is (in, out), need (out, in)
+        y = F.linear(x, weight_fp32.t())
+
+        return y.view(*x_shape[:-1], -1)
+
+    @torch.no_grad()
+    def to_seqlen_last_mode6(self, x):
+        """
+        Mode 6 专用：FP32 输入，使用 F.linear (和原版 mamba 一致)
+        输出格式：[batch, d_inner, seqlen] (seqlen last)
+
+        对应 to_seqlen_last 的 FP32 版本
+        """
+        B, L, D = x.shape
+        x = x.view(-1, D)
+
+        # Dequant INT8 weight to FP32
+        weight_fp32 = self.weight.float() * self.b.item()  # (in, out+pad)
+
+        # Remove padding
+        if self.pad_out != 0:
+            weight_fp32 = weight_fp32[:, :-self.pad_out]  # (in, out)
+
+        # F.linear expects weight shape (out, in)
+        y = F.linear(x, weight_fp32.t())  # (B*L, out)
+
+        # Reshape to (B, L, out) then transpose to (B, out, L) for seqlen_last format
+        y = y.view(B, L, -1)  # (B, L, out)
+        y = y.transpose(1, 2)  # (B, out, L)
+
+        return y
+
 
 class W8A8B8O8LinearParallel(torch.nn.Module):
 
