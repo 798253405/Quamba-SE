@@ -176,7 +176,6 @@ percentileRangeResults/*.npz
 
 # 子模块（用submodule管理）
 3rdparty/cutlass/
-3rdparty/causal-conv1d/
 
 # 临时测试脚本
 claudeYZ_*.py
