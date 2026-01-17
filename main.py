@@ -48,8 +48,8 @@ def main(args):
         elif args.mode == '6':
             model.forward = model.forward_mode6
 
-    # For Mode 5-0/5-1/5-2/5-3/5-4, use single-path eval forward (no intermediate stats printing)
-    if args.mode in ['5-0', '5-1', '5-2', '5-3', '5-4']:
+    # For Mode 5-0/5-1/5-2/5-3/5-4/5-6/5-7, use single-path eval forward (no intermediate stats printing)
+    if args.mode in ['5-0', '5-1', '5-2', '5-3', '5-4', '5-6', '5-7']:
         forward_method_name = f'forward_mode{args.mode.replace("-", "_")}_eval'
         if not hasattr(model, forward_method_name):
             logging.error(f"Model does not support Mode {args.mode}. Please ensure the model has {forward_method_name} method.")

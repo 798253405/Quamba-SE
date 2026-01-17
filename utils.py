@@ -39,7 +39,11 @@ def build_mamba_and_tokenizer(args, model_type="mamba"):
             # FIXME: the model and tokenizer will be initizlied again in modelutils_mamba.py
             tokenizer_ckpt = os.path.join(args.pretrained_dir, args.model, "mt_nlg_plus_multilingual_ja_zh_the_stack_frac_015_256k.model")
             tokenizer = _GPTSentencePieceTokenizer(tokenizer_ckpt)
-        model = QuambaLMHeadModel.from_pretrained(quantized_model_path, device="cuda")
+        high_precision_norm = getattr(args, 'high_precision_norm', False)
+        model = QuambaLMHeadModel.from_pretrained(
+            quantized_model_path, device="cuda",
+            high_precision_norm=high_precision_norm
+        )
         is_quamba = True
     else:
         raise ValueError(f"Unsupported model type: {model_type}, only support 'mamba', 'mamba2', 'quamba' and 'quamba2'")
@@ -130,7 +134,7 @@ def get_quantize_options(parser):
     # Quamba mode selection (unified interface)
     parser.add_argument(
         '--mode', type=str, default='0',
-        choices=['0', '2-0', '2-1', '2-2', '2-3', '2-4', '3', '4', '5', '5-0', '5-1', '5-2', '5-3', '5-4', '6', '6-0', '6-1', '6-2', '6-3', '6-4'],
+        choices=['0', '2-0', '2-1', '2-2', '2-3', '2-4', '3', '4', '5', '5-0', '5-1', '5-2', '5-3', '5-4', '5-6', '5-7', '6', '6-0', '6-1', '6-2', '6-3', '6-4'],
         help='Quamba quantization mode: '
         '0 (Baseline INT8 CUDA), '
         '2-0 (CUDA INT8 + Requantization), '
@@ -144,6 +148,7 @@ def get_quantize_options(parser):
         '5-0 (Single path: INT8 for eval), '
         '5-1 (Single path: FP32 for eval), '
         '5-2 (Single path: VirtualQuant+Outlier for eval), '
+        '5-6 (Single path: QuarterScale + Log2 for eval), '
         '6 (Dual-Path: Shared FP32 input comparison)'
     )
 
@@ -185,6 +190,10 @@ def parse_options():
     parser.add_argument(
         '--testing', action='store_true',
         help='testing with decreased sample count'
+    )
+    parser.add_argument(
+        '--high_precision_norm', action='store_true', default=False,
+        help='Use FP64 for RMSNorm computation (slower but more accurate, reduces floating point accumulation errors)'
     )
     parser.add_argument(
         '--eval_ppl', action='store_true', default=False,

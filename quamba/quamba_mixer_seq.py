@@ -38,15 +38,19 @@ class DeterministicRMSNorm(torch.nn.Module):
     """
     PyTorch 原生 RMSNorm 包装类，接口兼容 mamba_ssm Triton RMSNorm。
     使用 PyTorch 原生实现确保确定性计算 (Triton RMSNorm 是非确定性的)。
+
+    Args:
+        hidden_size: 隐藏层大小
+        eps: 数值稳定性 epsilon
+        high_precision: 是否使用 FP64 高精度计算 (默认 FP32)
+        device: 设备
+        dtype: 数据类型
     """
-    def __init__(self, hidden_size, eps=1e-5, device=None, dtype=None):
+    def __init__(self, hidden_size, eps=1e-5, high_precision=False, device=None, dtype=None):
         super().__init__()
         self.eps = eps
+        self.high_precision = high_precision
         self.weight = torch.nn.Parameter(torch.ones(hidden_size, device=device, dtype=dtype))
-
-    def _norm(self, x):
-        # RMS norm: x / sqrt(mean(x^2) + eps)
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x, residual=None, prenorm=False, residual_in_fp32=False):
         """
@@ -58,13 +62,26 @@ class DeterministicRMSNorm(torch.nn.Module):
             prenorm: 是否返回 (output, residual_out)
             residual_in_fp32: 残差是否保持 FP32
         """
+        original_dtype = x.dtype
+        # 选择计算精度: FP64 (高精度) 或 FP32 (标准)
+        compute_dtype = torch.float64 if self.high_precision else torch.float32
+
+        # 残差加法 (在计算精度下进行)
         if residual is not None:
-            x = x + residual.to(x.dtype)
+            x = x.to(compute_dtype) + residual.to(compute_dtype)
+        else:
+            x = x.to(compute_dtype)
 
-        residual_out = x if prenorm else None
+        # 保存 residual_out (转回原始精度)
+        residual_out = x.to(original_dtype) if prenorm else None
 
-        # 执行 RMS normalization
-        output = self._norm(x.float()).to(x.dtype) * self.weight
+        # RMS normalization: x / sqrt(mean(x^2) + eps)
+        # 全程在 compute_dtype 下计算
+        rstd = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        normed = x * rstd
+
+        # 乘以权重 (在计算精度下) 并转回原始精度
+        output = (normed * self.weight.to(compute_dtype)).to(original_dtype)
 
         if prenorm:
             if residual_in_fp32:
@@ -457,7 +474,12 @@ class QuambaLMHeadModel(MambaLMHeadModel, nn.Module):
                 # For Quamba1 (no quantized lm_head), norm_f should also be FP16 RMSNorm
                 # 使用 DeterministicRMSNorm 确保确定性 (Triton RMSNorm 是非确定性的)
                 norm_epsilon = getattr(config, 'norm_epsilon', 1e-5)
-                self.backbone.norm_f = DeterministicRMSNorm(d_model, eps=norm_epsilon, **factory_kwargs)
+                high_precision_norm = kwargs.get('high_precision_norm', False)
+                self.backbone.norm_f = DeterministicRMSNorm(
+                    d_model, eps=norm_epsilon,
+                    high_precision=high_precision_norm,
+                    **factory_kwargs
+                )
             elif lm_head_layer == "W4A16B16O16Linear" or lm_head_layer == "W4A8B16O16Linear" or lm_head_layer == "W8A8B16O16Linear":
                 self.lm_head = getattr(quamba, lm_head_layer)(d_model, vocab_size)
             else:
@@ -1052,6 +1074,91 @@ class QuambaLMHeadModel(MambaLMHeadModel, nn.Module):
                     residual_in_fp32=layer.residual_in_fp32
                 )
             hidden_states = layer.mixer.forward_mode6_4_eval(hidden_states_normed, inference_params=inference_params)
+
+        # Final norm
+        if not self.backbone.fused_add_norm:
+            residual = (hidden_states + residual) if residual is not None else hidden_states
+            hidden_states = self.backbone.norm_f(residual.to(dtype=self.backbone.norm_f.weight.dtype))
+        else:
+            hidden_states = self.backbone.norm_f(
+                hidden_states, residual=residual, prenorm=False,
+                residual_in_fp32=self.backbone.residual_in_fp32
+            )
+
+        if num_last_tokens > 0:
+            hidden_states = hidden_states[:, -num_last_tokens:]
+
+        lm_logits = self.lm_head(hidden_states)
+        CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
+        return CausalLMOutput(logits=lm_logits)
+
+    def forward_mode5_6_eval(self, input_ids, position_ids=None, inference_params=None, num_last_tokens=0):
+        """
+        Mode 5-6 Eval: QuarterScale + VirtualBiasedLog2Quant
+        - 高精度区域: |x| <= 8*scale (即 |q| < 32) 用 scale/4 (4× 精度)
+        - Log2 区域: |x| > 8*scale 用 8-bit Log2 量化 (k=0-255)
+        - x_proj: 重新量化回 INT8 (与 Mode 5-0 一致)
+        - SSM: FP32 mixed 输入
+        """
+        embedding = self.backbone.embedding(input_ids)
+        hidden_states = embedding
+        residual = None
+
+        for layer in self.backbone.layers:
+            if not layer.fused_add_norm:
+                residual = (hidden_states + residual) if residual is not None else hidden_states
+                hidden_states_normed = layer.norm(residual.to(dtype=layer.norm.weight.dtype))
+                if layer.residual_in_fp32:
+                    residual = residual.to(torch.float32)
+            else:
+                hidden_states_normed, residual = layer.norm(
+                    hidden_states, residual=residual, prenorm=True,
+                    residual_in_fp32=layer.residual_in_fp32
+                )
+            hidden_states = layer.mixer.forward_mode5_6(hidden_states_normed, inference_params=inference_params)
+
+        # Final norm
+        if not self.backbone.fused_add_norm:
+            residual = (hidden_states + residual) if residual is not None else hidden_states
+            hidden_states = self.backbone.norm_f(residual.to(dtype=self.backbone.norm_f.weight.dtype))
+        else:
+            hidden_states = self.backbone.norm_f(
+                hidden_states, residual=residual, prenorm=False,
+                residual_in_fp32=self.backbone.residual_in_fp32
+            )
+
+        if num_last_tokens > 0:
+            hidden_states = hidden_states[:, -num_last_tokens:]
+
+        lm_logits = self.lm_head(hidden_states)
+        CausalLMOutput = namedtuple("CausalLMOutput", ["logits"])
+        return CausalLMOutput(logits=lm_logits)
+
+    def forward_mode5_7_eval(self, input_ids, position_ids=None, inference_params=None, num_last_tokens=0):
+        """
+        Mode 5-7 Eval: Three-Segment Uniform Quantization (三段均匀量化)
+        - 高精度区域: |x| <= 15.75*scale, scale/4 (4× 精度), ±63 levels
+        - 中精度区域: 16*scale <= |x| <= 143*scale, scale (原始精度), ±127 levels
+        - 低精度区域: |x| > 143*scale, scale*4 (1/4 精度), ±63 levels
+        - x_proj: 重新量化回 INT8 (与 Mode 5-0 一致)
+        - SSM: FP32 mixed 输入
+        """
+        embedding = self.backbone.embedding(input_ids)
+        hidden_states = embedding
+        residual = None
+
+        for layer in self.backbone.layers:
+            if not layer.fused_add_norm:
+                residual = (hidden_states + residual) if residual is not None else hidden_states
+                hidden_states_normed = layer.norm(residual.to(dtype=layer.norm.weight.dtype))
+                if layer.residual_in_fp32:
+                    residual = residual.to(torch.float32)
+            else:
+                hidden_states_normed, residual = layer.norm(
+                    hidden_states, residual=residual, prenorm=True,
+                    residual_in_fp32=layer.residual_in_fp32
+                )
+            hidden_states = layer.mixer.forward_mode5_7(hidden_states_normed, inference_params=inference_params)
 
         # Final norm
         if not self.backbone.fused_add_norm:

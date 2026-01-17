@@ -685,13 +685,9 @@ class W4A8QMamba(nn.Module):
             conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
         x = self.conv1d.forward(x)
 
-        # Check if FP32 SSM mode is enabled (requires requantization for x_proj)
+        # Check if FP32 SSM mode is enabled (Mode 4 only)
         import os
-        fp32_mode_enabled = (
-            os.environ.get('FLOAT_SIM_ASIC_INT8', 'false').lower() == 'true' or
-            os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true' or
-            os.environ.get('CONV1D_MODE3_FP32', 'false').lower() == 'true'
-        )
+        fp32_mode_enabled = os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true'
 
         # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
         # # Only debug last layer (layer_idx == 23 for 24-layer model)
@@ -753,32 +749,12 @@ class W4A8QMamba(nn.Module):
         #                 print(f"    output_scale: {self.out_proj.output_scale:.10f}")
         # # ===== END TEMPORARY DEBUG CODE =====
 
-        # Convert Conv1D output for use in SSM
-        # Different modes have different requirements for SSM input dtype
+        # Convert Conv1D output for use in SSM (Mode 4 only)
         if fp32_mode_enabled:
-            # Check mode-specific environment variables
-            ssm_use_pytorch_int8 = os.environ.get('SSM_USE_PYTORCH_INT8', 'false').lower() == 'true'
-            conv1d_mode23_fp32 = os.environ.get('CONV1D_MODE23_FP32', 'false').lower() == 'true'
-
-            if x.dtype == torch.int8:
-                # x is INT8 from Conv1D (Mode 2-0, 2-1, 2-2, 2-3 when FLOAT_SIM_ASIC_INT8=true)
-                x_for_xproj = x  # INT8 for x_proj
-
-                # Mode 2-1: Keep INT8 for PyTorch INT8 SSM (direct pass, no dequant)
-                # Mode 2-0, 2-2: Dequantize to FP32 for SSM
-                if ssm_use_pytorch_int8 and not conv1d_mode23_fp32:
-                    # Mode 2-1: PyTorch INT8 SSM expects INT8 input directly
-                    x_for_ssm = x  # Keep INT8
-                else:
-                    # Mode 2-0 (CUDA INT8 SSM with requant), Mode 2-2 (FP32 SSM)
-                    x_for_ssm = x.float() * self.conv1d.output_scale  # Dequantize to FP32
-            elif x.dtype == torch.float32:
-                # x is FP32 from Conv1D (Mode 2-3, 2-4)
-                # Requantize to INT8 for x_proj, keep FP32 for SSM
-                x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
-                x_for_ssm = x  # Keep FP32 for SSM
-            else:
-                raise ValueError(f"Unexpected dtype in fp32_mode_enabled: {x.dtype}")
+            # Mode 4: x is FP32 from Conv1D
+            # Requantize to INT8 for x_proj, keep FP32 for SSM
+            x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+            x_for_ssm = x  # Keep FP32 for SSM
 
             # Compute dt, B, C using INT8
             x_reshape = rearrange(x_for_xproj, "b d l -> b l d").contiguous()
@@ -840,11 +816,6 @@ class W4A8QMamba(nn.Module):
                         import sys
                         sys.exit(0)
 
-            # ===== DUAL MODE DEBUG: Compare Mode 2-0 vs 2-1 =====
-            # Run for ALL samples (remove the hasattr check)
-            if self.layer_idx == 23 and os.environ.get('DUAL_MODE_DEBUG', 'false').lower() == 'true':
-                dual_mode_compare_ssm(self, x, dt, B, C, z, self.conv1d.output_scale)
-
             # SSM with FP32 input (ONLY u is FP32, dt/B/C are INT8)
             y = self.selective_scan.forward(x_for_ssm, dt, B, C, z=z, return_last_state=ssm_state is not None)
         else:
@@ -872,34 +843,72 @@ class W4A8QMamba(nn.Module):
             #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
             # # ===== END TEMPORARY DEBUG CODE =====
 
-            # ===== DEBUG: Mode 0 Scale和输出 =====
-            if os.environ.get('DEBUG_MODE0_VS_MODE50', 'false').lower() == 'true':
-                if self.layer_idx == 23:
+            # ===== DEBUG: Mode 0 统一调试输出 =====
+            import os
+            if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+                # 对所有层统计 overflow (理论上，反量化后如果用 x_proj scale 重新量化的值)
+                x_dequant = x.float() * self.conv1d.output_scale
+                x_requant = x_dequant / self.x_proj.a.item()  # 如果用 x_proj scale 重新量化
+                overflow_mask = torch.abs(x_requant) > 127
+                overflow_count = overflow_mask.sum().item()
+                total_count = overflow_mask.numel()
+                overflow_ratio = overflow_count / total_count * 100
+
+                # 累积所有层的 overflow 统计
+                if not hasattr(self, '_mode0_overflow_stats'):
+                    self._mode0_overflow_stats = {'overflow': 0, 'total': 0}
+                self._mode0_overflow_stats['overflow'] += overflow_count
+                self._mode0_overflow_stats['total'] += total_count
+
+                # 最后一层打印详细信息
+                last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+                if self.layer_idx == last_layer_idx:
                     if not hasattr(self, '_mode0_debug_count'):
                         self._mode0_debug_count = 0
                     self._mode0_debug_count += 1
-                    if self._mode0_debug_count == 1:
+                    if self._mode0_debug_count == 1:  # 只打印第一次
                         print(f"\n{'='*80}")
-                        print(f"[Mode 0 - Layer 24] Scale和输出对比")
+                        print(f"[Mode 0 - Layer {last_layer_idx+1}] Debug Output (Baseline INT8)")
                         print(f"{'='*80}")
+                        # 全局 overflow 统计
+                        global_overflow_ratio = self._mode0_overflow_stats['overflow'] / self._mode0_overflow_stats['total'] * 100
+                        print(f"\n--- Overflow Statistics (All Layers) ---")
+                        print(f"  Total overflow: {self._mode0_overflow_stats['overflow']} / {self._mode0_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
+                        print(f"  NOTE: Mode 0 uses INT8 throughout, overflow is theoretical (if re-quantized with x_proj scale)")
+                        # Conv1D 输出
+                        print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                        print(f"  x_int8 raw: min={x.min().item()}, max={x.max().item()}")
+                        print(f"  x_dequant: min={x_dequant.min().item():.4f}, max={x_dequant.max().item():.4f}, mean={x_dequant.mean().item():.4f}, std={x_dequant.std().item():.4f}")
+                        print(f"  x_dequant first 5: {x_dequant[0, 0, :5].tolist()}")
+                        print(f"  x_int8 first 5: {x[0, 0, :5].tolist()}")
+                        print(f"  Layer overflow (theoretical): {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
+                        # Scales
+                        print(f"\n--- Scales ---")
+                        print(f"  conv1d.input_scale:  {self.conv1d.input_scale:.10f}")
                         print(f"  conv1d.output_scale: {self.conv1d.output_scale:.10f}")
-                        print(f"  x_proj.a (input/output scale): {self.x_proj.a.item():.10f}")
+                        print(f"  x_proj.a (input_scale): {self.x_proj.a.item():.10f}")
                         print(f"  selective_scan.u_scale: {self.selective_scan.u_scale.item():.10f}")
-                        print(f"  x (INT8) [0,0,:5]: {x[0,0,:5].tolist()}")
-                        print(f"  x (dequant) [0,0,:5]: {(x.float()*self.conv1d.output_scale)[0,0,:5].tolist()}")
-                        print(f"  dt (INT8) [0,0,:5]: {dt[0,0,:5].tolist()}")
-                        print(f"  B (INT8) [0,0,:5]: {B[0,0,:5].tolist()}")
-                        print(f"  C (INT8) [0,0,:5]: {C[0,0,:5].tolist()}")
-                        print(f"{'='*80}\n")
+                        # x_proj 输出
+                        print(f"\n--- x_proj/dt_proj Output ---")
+                        print(f"  dt first 5: {dt[0, 0, :5].tolist()}")
+                        print(f"  B first 5: {B[0, 0, :5].tolist()}")
+                        print(f"  C first 5: {C[0, 0, :5].tolist()}")
             # ===== END DEBUG =====
 
             # SSM step and return ssm_state
             y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
 
             # ===== DEBUG: Mode 0 SSM输出 =====
-            if os.environ.get('DEBUG_MODE0_VS_MODE50', 'false').lower() == 'true':
-                if self.layer_idx == 23 and self._mode0_debug_count == 1:
-                    print(f"[Mode 0] SSM output y[0,0,:5]: {y[0,0,:5].tolist()}")
+            import os
+            if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+                last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+                if self.layer_idx == last_layer_idx and hasattr(self, '_mode0_debug_count') and self._mode0_debug_count == 1:
+                    # y 可能是 tuple (y, last_state) 或者 tensor
+                    y_tensor = y[0] if isinstance(y, tuple) else y
+                    print(f"\n--- SSM Output ---")
+                    print(f"  y: min={y_tensor.min().item():.6f}, max={y_tensor.max().item():.6f}, mean={y_tensor.mean().item():.6f}")
+                    print(f"  y first 5: {y_tensor[0, 0, :5].tolist()}")
+                    print(f"{'='*80}\n")
             # ===== END DEBUG =====
 
         if ssm_state is not None:
@@ -1156,100 +1165,16 @@ class W8A8QMamba(nn.Module):
             conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
         x = self.conv1d.forward(x)
 
-        # Check if FP32 SSM mode is enabled (requires requantization for x_proj)
+        # Check if FP32 SSM mode is enabled (Mode 4 only)
         import os
-        fp32_mode_enabled = (
-            os.environ.get('FLOAT_SIM_ASIC_INT8', 'false').lower() == 'true' or
-            os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true' or
-            os.environ.get('CONV1D_MODE3_FP32', 'false').lower() == 'true'
-        )
+        fp32_mode_enabled = os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true'
 
-        # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
-        # # Only debug last layer (layer_idx == 23 for 24-layer model)
-        # DEBUG_ENABLED = self.layer_idx is not None and self.layer_idx == 23
-        # if DEBUG_ENABLED:
-        #     if not hasattr(self, '_debug_step_count'):
-        #         self._debug_step_count = 0
-        #     self._debug_step_count += 1
-        #     # Only print first 3 calls for this layer
-        #     if self._debug_step_count <= 3:
-        #         print(f"\n{'='*80}")
-        #         print(f"[Layer {self.layer_idx} Call #{self._debug_step_count}] After Conv1D")
-        #         print(f"  x dtype: {x.dtype}, shape: {x.shape}")
-        #         x_vals = x.flatten()[:10]
-        #         print(f"  First 10 values (high precision):")
-        #         for i in range(min(10, x_vals.numel())):
-        #             print(f"    x[{i}] = {x_vals[i]:.12f}" if x.dtype == torch.float32 else f"    x[{i}] = {x_vals[i]}")
-        #         if hasattr(x, '_dual_scale_overflow_mask'):
-        #             print(f"  x has dual-scale metadata (outliers: {x._dual_scale_overflow_mask.sum().item()})")
-
-        #         # Print all scales for this layer (first call only)
-        #         if self._debug_step_count == 1:
-        #             print(f"\n  === Layer {self.layer_idx} All Scales ===")
-        #             print(f"  in_proj scales:")
-        #             if hasattr(self.in_proj, 'input_scale'):
-        #                 print(f"    input_scale: {self.in_proj.input_scale:.10f}")
-        #             if hasattr(self.in_proj, 'weight_scale'):
-        #                 print(f"    weight_scale: {self.in_proj.weight_scale:.10f}")
-        #             if hasattr(self.in_proj, 'output_scale'):
-        #                 print(f"    output_scale: {self.in_proj.output_scale:.10f}")
-
-        #             print(f"  conv1d scales:")
-        #             print(f"    input_scale: {self.conv1d.input_scale:.10f}")
-        #             print(f"    weight_scale: {self.conv1d.weight_scale:.10f}")
-        #             if hasattr(self.conv1d, 'bias_scale') and self.conv1d.bias_scale is not None:
-        #                 print(f"    bias_scale: {self.conv1d.bias_scale:.10f}")
-        #             print(f"    output_scale: {self.conv1d.output_scale:.10f}")
-
-        #             print(f"  x_proj scales:")
-        #             if hasattr(self.x_proj, 'input_scale'):
-        #                 print(f"    input_scale: {self.x_proj.input_scale:.10f}")
-        #             if hasattr(self.x_proj, 'weight_scale'):
-        #                 print(f"    weight_scale: {self.x_proj.weight_scale:.10f}")
-        #             if hasattr(self.x_proj, 'output_scale'):
-        #                 print(f"    output_scale: {self.x_proj.output_scale:.10f}")
-
-        #             print(f"  selective_scan scales:")
-        #             if hasattr(self.selective_scan, 'u_scale'):
-        #                 print(f"    u_scale: {self.selective_scan.u_scale:.10f}")
-        #             if hasattr(self.selective_scan, 'dt_scale'):
-        #                 print(f"    dt_scale: {self.selective_scan.dt_scale:.10f}")
-
-        #             print(f"  out_proj scales:")
-        #             if hasattr(self.out_proj, 'input_scale'):
-        #                 print(f"    input_scale: {self.out_proj.input_scale:.10f}")
-        #             if hasattr(self.out_proj, 'weight_scale'):
-        #                 print(f"    weight_scale: {self.out_proj.weight_scale:.10f}")
-        #             if hasattr(self.out_proj, 'output_scale'):
-        #                 print(f"    output_scale: {self.out_proj.output_scale:.10f}")
-        # # ===== END TEMPORARY DEBUG CODE =====
-
-        # Convert Conv1D output for use in SSM
-        # Different modes have different requirements for SSM input dtype
+        # Convert Conv1D output for use in SSM (Mode 4 only)
         if fp32_mode_enabled:
-            # Check mode-specific environment variables
-            ssm_use_pytorch_int8 = os.environ.get('SSM_USE_PYTORCH_INT8', 'false').lower() == 'true'
-            conv1d_mode23_fp32 = os.environ.get('CONV1D_MODE23_FP32', 'false').lower() == 'true'
-
-            if x.dtype == torch.int8:
-                # x is INT8 from Conv1D (Mode 2-0, 2-1, 2-2, 2-3 when FLOAT_SIM_ASIC_INT8=true)
-                x_for_xproj = x  # INT8 for x_proj
-
-                # Mode 2-1: Keep INT8 for PyTorch INT8 SSM (direct pass, no dequant)
-                # Mode 2-0, 2-2: Dequantize to FP32 for SSM
-                if ssm_use_pytorch_int8 and not conv1d_mode23_fp32:
-                    # Mode 2-1: PyTorch INT8 SSM expects INT8 input directly
-                    x_for_ssm = x  # Keep INT8
-                else:
-                    # Mode 2-0 (CUDA INT8 SSM with requant), Mode 2-2 (FP32 SSM)
-                    x_for_ssm = x.float() * self.conv1d.output_scale  # Dequantize to FP32
-            elif x.dtype == torch.float32:
-                # x is FP32 from Conv1D (Mode 2-3, 2-4)
-                # Requantize to INT8 for x_proj, keep FP32 for SSM
-                x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
-                x_for_ssm = x  # Keep FP32 for SSM
-            else:
-                raise ValueError(f"Unexpected dtype in fp32_mode_enabled: {x.dtype}")
+            # Mode 4: x is FP32 from Conv1D
+            # Requantize to INT8 for x_proj, keep FP32 for SSM
+            x_for_xproj = torch.round(x / self.conv1d.output_scale).clamp(-128, 127).to(torch.int8)
+            x_for_ssm = x  # Keep FP32 for SSM
 
             # Compute dt, B, C using INT8
             x_reshape = rearrange(x_for_xproj, "b d l -> b l d").contiguous()
@@ -1261,14 +1186,7 @@ class W8A8QMamba(nn.Module):
             B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
 
-            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
-            # if DEBUG_ENABLED and self._debug_step_count <= 3:
-            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
-            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
-            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
-            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
-            # # ===== END TEMPORARY DEBUG CODE =====
-
+        
             # Print Layer 24 SSM scales (before SSM forward) - only once
             if self.layer_idx == 23:
                 if not hasattr(self, '_ssm_scales_printed'):
@@ -1311,66 +1229,86 @@ class W8A8QMamba(nn.Module):
                         import sys
                         sys.exit(0)
 
-            # ===== DUAL MODE DEBUG: Compare Mode 2-0 vs 2-1 =====
-            # Run for ALL samples (remove the hasattr check)
-            if self.layer_idx == 23 and os.environ.get('DUAL_MODE_DEBUG', 'false').lower() == 'true':
-                dual_mode_compare_ssm(self, x, dt, B, C, z, self.conv1d.output_scale)
-
             # SSM with FP32 input (ONLY u is FP32, dt/B/C are INT8)
             y = self.selective_scan.forward(x_for_ssm, dt, B, C, z=z, return_last_state=ssm_state is not None)
+            sys.exit(0)# path 2 not used. Exit to avoid mistakes
         else:
             # Original INT8 path (completely unchanged)
             x_reshape = rearrange(x, "b d l -> b l d").contiguous()
             x_dbl = self.x_proj(x_reshape)  # (bl d)
             dt, B, C = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1)
 
-            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
-            # if DEBUG_ENABLED and self._debug_step_count <= 3:
-            #     print(f"  After x_proj: x_dbl dtype: {x_dbl.dtype}, first 3: {x_dbl.flatten()[:3].tolist()}")
-            #     print(f"  dt (before dt_proj) dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
-            # # ===== END TEMPORARY DEBUG CODE =====
-
             # Compute dt proj with x_proj_scale
             dt = self.dt_proj.to_seqlen_last(dt.contiguous())
             B = rearrange(B, "b l dstate -> b dstate l", l=seqlen).contiguous()
             C = rearrange(C, "b l dstate -> b dstate l", l=seqlen).contiguous()
+ 
+            # ===== DEBUG: Mode 0 统一调试输出 =====
+            import os
+            if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+                # 对所有层统计 overflow (理论上，反量化后如果用 x_proj scale 重新量化的值)
+                x_dequant = x.float() * self.conv1d.output_scale
+                x_requant = x_dequant / self.x_proj.a.item()  # 如果用 x_proj scale 重新量化
+                overflow_mask = torch.abs(x_requant) > 127
+                overflow_count = overflow_mask.sum().item()
+                total_count = overflow_mask.numel()
+                overflow_ratio = overflow_count / total_count * 100
 
-            # # ===== TEMPORARY DEBUG CODE - TO BE DELETED =====
-            # if DEBUG_ENABLED and self._debug_step_count <= 3:
-            #     print(f"  After dt_proj: dt dtype: {dt.dtype}, first 3: {dt.flatten()[:3].tolist()}")
-            #     print(f"  B dtype: {B.dtype}, first 3: {B.flatten()[:3].tolist()}")
-            #     print(f"  C dtype: {C.dtype}, first 3: {C.flatten()[:3].tolist()}")
-            #     print(f"  z dtype: {z.dtype if z is not None else 'None'}, first 3: {z.flatten()[:3].tolist() if z is not None else 'N/A'}")
-            # # ===== END TEMPORARY DEBUG CODE =====
+                # 累积所有层的 overflow 统计
+                if not hasattr(self, '_mode0_overflow_stats'):
+                    self._mode0_overflow_stats = {'overflow': 0, 'total': 0}
+                self._mode0_overflow_stats['overflow'] += overflow_count
+                self._mode0_overflow_stats['total'] += total_count
 
-            # ===== DEBUG: Mode 0 Scale和输出 =====
-            if os.environ.get('DEBUG_MODE0_VS_MODE50', 'false').lower() == 'true':
-                if self.layer_idx == 23:
+                # 最后一层打印详细信息
+                last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+                if self.layer_idx == last_layer_idx:
                     if not hasattr(self, '_mode0_debug_count'):
                         self._mode0_debug_count = 0
                     self._mode0_debug_count += 1
-                    if self._mode0_debug_count == 1:
+                    if self._mode0_debug_count == 1:  # 只打印第一次
                         print(f"\n{'='*80}")
-                        print(f"[Mode 0 - Layer 24] Scale和输出对比")
+                        print(f"[Mode 0 - Layer {last_layer_idx+1}] Debug Output (Baseline INT8)")
                         print(f"{'='*80}")
+                        # 全局 overflow 统计
+                        global_overflow_ratio = self._mode0_overflow_stats['overflow'] / self._mode0_overflow_stats['total'] * 100
+                        print(f"\n--- Overflow Statistics (All Layers) ---")
+                        print(f"  Total overflow: {self._mode0_overflow_stats['overflow']} / {self._mode0_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
+                        print(f"  NOTE: Mode 0 uses INT8 throughout, overflow is theoretical (if re-quantized with x_proj scale)")
+                        # Conv1D 输出
+                        print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                        print(f"  x_int8 raw: min={x.min().item()}, max={x.max().item()}")
+                        print(f"  x_dequant: min={x_dequant.min().item():.4f}, max={x_dequant.max().item():.4f}, mean={x_dequant.mean().item():.4f}, std={x_dequant.std().item():.4f}")
+                        print(f"  x_dequant first 5: {x_dequant[0, 0, :5].tolist()}")
+                        print(f"  x_int8 first 5: {x[0, 0, :5].tolist()}")
+                        print(f"  Layer overflow (theoretical): {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
+                        # Scales
+                        print(f"\n--- Scales ---")
+                        print(f"  conv1d.input_scale:  {self.conv1d.input_scale:.10f}")
                         print(f"  conv1d.output_scale: {self.conv1d.output_scale:.10f}")
-                        print(f"  x_proj.a (input/output scale): {self.x_proj.a.item():.10f}")
+                        print(f"  x_proj.a (input_scale): {self.x_proj.a.item():.10f}")
                         print(f"  selective_scan.u_scale: {self.selective_scan.u_scale.item():.10f}")
-                        print(f"  x (INT8) [0,0,:5]: {x[0,0,:5].tolist()}")
-                        print(f"  x (dequant) [0,0,:5]: {(x.float()*self.conv1d.output_scale)[0,0,:5].tolist()}")
-                        print(f"  dt (INT8) [0,0,:5]: {dt[0,0,:5].tolist()}")
-                        print(f"  B (INT8) [0,0,:5]: {B[0,0,:5].tolist()}")
-                        print(f"  C (INT8) [0,0,:5]: {C[0,0,:5].tolist()}")
-                        print(f"{'='*80}\n")
+                        # x_proj 输出
+                        print(f"\n--- x_proj/dt_proj Output ---")
+                        print(f"  dt first 5: {dt[0, 0, :5].tolist()}")
+                        print(f"  B first 5: {B[0, 0, :5].tolist()}")
+                        print(f"  C first 5: {C[0, 0, :5].tolist()}")
             # ===== END DEBUG =====
 
             # SSM step and return ssm_state
             y = self.selective_scan.forward(x, dt, B, C, z=z, return_last_state=ssm_state is not None)
 
             # ===== DEBUG: Mode 0 SSM输出 =====
-            if os.environ.get('DEBUG_MODE0_VS_MODE50', 'false').lower() == 'true':
-                if self.layer_idx == 23 and self._mode0_debug_count == 1:
-                    print(f"[Mode 0] SSM output y[0,0,:5]: {y[0,0,:5].tolist()}")
+            import os
+            if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+                last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+                if self.layer_idx == last_layer_idx and hasattr(self, '_mode0_debug_count') and self._mode0_debug_count == 1:
+                    # y 可能是 tuple (y, last_state) 或者 tensor
+                    y_tensor = y[0] if isinstance(y, tuple) else y
+                    print(f"\n--- SSM Output ---")
+                    print(f"  y: min={y_tensor.min().item():.6f}, max={y_tensor.max().item():.6f}, mean={y_tensor.mean().item():.6f}")
+                    print(f"  y first 5: {y_tensor[0, 0, :5].tolist()}")
+                    print(f"{'='*80}\n")
             # ===== END DEBUG =====
 
         if ssm_state is not None:
@@ -1529,41 +1467,55 @@ class W8A8QMamba(nn.Module):
 
         # ===== DEBUG: Mode 5-0 vs Mode 0 对比 =====
         import os
-        if os.environ.get('DEBUG_MODE0_VS_MODE50', 'false').lower() == 'true':
-            if self.layer_idx == 23:  # 只打印最后一层
+        if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+            # 对所有层统计 overflow，但只打印最后一层详细信息
+            # 统计 overflow (超出 INT8 范围)
+            overflow_mask = torch.abs(x_5_0_scaled) > 127
+            overflow_count = overflow_mask.sum().item()
+            total_count = overflow_mask.numel()
+            overflow_ratio = overflow_count / total_count * 100
+
+            # 累积所有层的 overflow 统计
+            if not hasattr(self, '_mode50_overflow_stats'):
+                self._mode50_overflow_stats = {'overflow': 0, 'total': 0}
+            self._mode50_overflow_stats['overflow'] += overflow_count
+            self._mode50_overflow_stats['total'] += total_count
+
+            # 最后一层打印详细信息
+            last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+            if self.layer_idx == last_layer_idx:
                 if not hasattr(self, '_mode50_debug_count'):
                     self._mode50_debug_count = 0
                 self._mode50_debug_count += 1
                 if self._mode50_debug_count == 1:  # 只打印第一次
                     print(f"\n{'='*80}")
-                    print(f"[Mode 5-0 - Layer 24 - W8A8QMamba] Debug Output")
+                    print(f"[Mode 5-0 - Layer {last_layer_idx+1}] Debug Output (Virtual INT8)")
                     print(f"{'='*80}")
+                    # 全局 overflow 统计
+                    global_overflow_ratio = self._mode50_overflow_stats['overflow'] / self._mode50_overflow_stats['total'] * 100
+                    print(f"\n--- Overflow Statistics (All Layers) ---")
+                    print(f"  Total overflow: {self._mode50_overflow_stats['overflow']} / {self._mode50_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
                     # Conv1D 输出
-                    print(f"\n--- Conv1D Output ---")
-                    print(f"  x_5_0_fp32 (FP32 raw): shape={x_5_0_fp32.shape}, dtype={x_5_0_fp32.dtype}")
-                    print(f"  x_5_0_fp32 first 5: {x_5_0_fp32[0, 0, :5].tolist()}")
-                    print(f"  x_5_0_virtual_int8 (FP32 on grid): {x_5_0_virtual_int8[0, 0, :5].tolist()}")
-                    print(f"  x_5_0_int8_for_xproj (INT8): {x_5_0_int8_for_xproj[0, 0, :5].tolist()}")
+                    print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                    print(f"  x_fp32 raw: min={x_5_0_fp32.min().item():.4f}, max={x_5_0_fp32.max().item():.4f}, mean={x_5_0_fp32.mean().item():.4f}, std={x_5_0_fp32.std().item():.4f}")
+                    print(f"  x_fp32 first 5: {x_5_0_fp32[0, 0, :5].tolist()}")
+                    print(f"  x_virtual_int8 first 5: {x_5_0_virtual_int8[0, 0, :5].tolist()}")
+                    print(f"  x_int8 first 5: {x_5_0_int8_for_xproj[0, 0, :5].tolist()}")
+                    print(f"  Layer overflow: {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
                     # Scales
                     print(f"\n--- Scales ---")
                     print(f"  conv1d.input_scale:  {self.conv1d.input_scale:.10f}")
                     print(f"  conv1d.output_scale: {self.conv1d.output_scale:.10f}")
                     print(f"  x_proj.a (input_scale): {self.x_proj.a.item():.10f}")
-                    print(f"  u_scale (for SSM):   {self.selective_scan.u_scale.item():.10f}")
                     # x_proj 输出
-                    print(f"\n--- x_proj Output ---")
-                    print(f"  x_dbl_5_0 (INT8): shape={x_dbl_5_0.shape}, dtype={x_dbl_5_0.dtype}")
-                    print(f"  x_dbl_5_0 first 5: {x_dbl_5_0[0, 0, :5].tolist()}")
-                    # dt/B/C
-                    print(f"\n--- dt/B/C ---")
-                    print(f"  dt_5_0 (INT8): shape={dt_5_0.shape}, first 5: {dt_5_0[0, 0, :5].tolist()}")
-                    print(f"  B_5_0 (INT8): shape={B_5_0.shape}, first 5: {B_5_0[0, 0, 0, :5].tolist()}")
-                    print(f"  C_5_0 (INT8): shape={C_5_0.shape}, first 5: {C_5_0[0, 0, 0, :5].tolist()}")
-                    print(f"  z_5_0 (INT8): shape={z_5_0.shape}, first 5: {z_5_0[0, 0, :5].tolist()}")
+                    print(f"\n--- x_proj/dt_proj Output ---")
+                    print(f"  dt first 5: {dt_5_0[0, 0, :5].tolist()}")
+                    print(f"  B first 5: {B_5_0[0, 0, 0, :5].tolist()}")
+                    print(f"  C first 5: {C_5_0[0, 0, 0, :5].tolist()}")
                     # SSM 输出
                     print(f"\n--- SSM Output ---")
-                    print(f"  y_5_0: shape={y_5_0.shape}, dtype={y_5_0.dtype}")
-                    print(f"  y_5_0 first 5: {y_5_0[0, 0, :5].tolist()}")
+                    print(f"  y: min={y_5_0.min().item():.6f}, max={y_5_0.max().item():.6f}, mean={y_5_0.mean().item():.6f}")
+                    print(f"  y first 5: {y_5_0[0, 0, :5].tolist()}")
                     print(f"{'='*80}\n")
         # ===== END DEBUG =====
 
@@ -1630,7 +1582,7 @@ class W8A8QMamba(nn.Module):
         def ensure_shape_1(t):
             return t.view(1) if t.dim() == 0 else t
 
-        y_5_1, _ = quant_sscan_cuda.fwd_mode5(
+        y_5_1_ssm_out, _ = quant_sscan_cuda.fwd_mode5(
             x_5_1_fp32,  # FP32 输入 (保留 outlier 精度, 与 Mode 0 不同)
             dt_5_1, ensure_shape_1(self.selective_scan.dt_scale),
             self.selective_scan.A_log, ensure_shape_1(self.selective_scan.A_scale),
@@ -1644,27 +1596,70 @@ class W8A8QMamba(nn.Module):
         )
 
         # === Step 5: had + out_proj ===
-        y_5_1_fp16 = y_5_1.half() if y_5_1.dtype != torch.float16 else y_5_1
+        y_5_1_fp16 = y_5_1_ssm_out.half() if y_5_1_ssm_out.dtype != torch.float16 else y_5_1_ssm_out
         y_5_1 = self.had(y_5_1_fp16)
         out_5_1 = self.out_proj(y_5_1)
 
         # ===== DEBUG: Mode 5-1 数值打印 =====
-        _DEBUG_LAYER_COUNTER['count'] += 1
-        if _DEBUG_LAYER_COUNTER['total'] is None:
-            _DEBUG_LAYER_COUNTER['total'] = 24  # 130M=24, 1.4B=48, 2.8B=64
-        if _DEBUG_LAYER_COUNTER['count'] == _DEBUG_LAYER_COUNTER['total']:
-            def _get_val(x):
-                return x.item() if hasattr(x, 'item') else x
-            print(f"\n===== Mode 5-1 最后一层 =====")
-            print(f"conv1d.input_scale: {_get_val(self.conv1d.input_scale):.6f}")
-            print(f"conv1d.output_scale: {_get_val(self.conv1d.output_scale):.6f}")
-            print(f"x_proj.a: {_get_val(self.x_proj.a):.6f}")
-            print(f"Conv1D out (FP32): {x_5_1_fp32.flatten()[:3].tolist()}")
-            print(f"x_proj input (re-quant INT8): {x_5_1_int8_for_xproj.flatten()[:3].tolist()}")
-            print(f"dt: {dt_5_1.flatten()[:3].tolist()}")
-            print(f"B: {B_5_1.flatten()[:3].tolist()}")
-            print(f"C: {C_5_1.flatten()[:3].tolist()}")
-            # import sys; sys.exit(0)  # 方便注释 - DISABLED for eval
+        import os
+        if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+            # 计算 overflow 统计 (与 x_proj 输入相关)
+            x_5_1_scaled = x_5_1_fp32 / self.conv1d.output_scale
+            overflow_mask = torch.abs(x_5_1_scaled) > 127
+            overflow_count = overflow_mask.sum().item()
+            total_count = overflow_mask.numel()
+            overflow_ratio = overflow_count / total_count * 100
+
+            # 累积所有层的 overflow 统计
+            if not hasattr(self, '_mode51_overflow_stats'):
+                self._mode51_overflow_stats = {'overflow': 0, 'total': 0}
+            self._mode51_overflow_stats['overflow'] += overflow_count
+            self._mode51_overflow_stats['total'] += total_count
+
+            # 最后一层打印详细信息
+            last_layer_idx = 63  # 2.8b=63, 1.4b=47, 130m=23
+            if self.layer_idx == last_layer_idx:
+                if not hasattr(self, '_mode51_debug_count'):
+                    self._mode51_debug_count = 0
+                self._mode51_debug_count += 1
+                if self._mode51_debug_count == 1:  # 只打印第一次
+                    print(f"\n{'='*80}")
+                    print(f"[Mode 5-1 - Layer {last_layer_idx+1}] Debug Output (FP32 Path)")
+                    print(f"{'='*80}")
+                    # 全局 overflow 统计
+                    global_overflow_ratio = self._mode51_overflow_stats['overflow'] / self._mode51_overflow_stats['total'] * 100
+                    print(f"\n--- Overflow Statistics (All Layers) ---")
+                    print(f"  Total overflow: {self._mode51_overflow_stats['overflow']} / {self._mode51_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
+                    print(f"  NOTE: Mode 5-1 SSM uses raw FP32, overflow only affects x_proj input")
+                    # Conv1D 输出
+                    print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                    print(f"  x_fp32 raw: min={x_5_1_fp32.min().item():.4f}, max={x_5_1_fp32.max().item():.4f}, mean={x_5_1_fp32.mean().item():.4f}, std={x_5_1_fp32.std().item():.4f}")
+                    print(f"  x_fp32 first 5: {x_5_1_fp32[0, 0, :5].tolist()}")
+                    print(f"  x_int8 (for x_proj) first 5: {x_5_1_int8_for_xproj[0, 0, :5].tolist()}")
+                    print(f"  Layer overflow: {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
+                    # 关键区别：SSM 输入对比
+                    x_5_1_virtual_int8 = roundf_like(x_5_1_scaled).clamp(-128, 127) * self.conv1d.output_scale
+                    ssm_input_diff = (x_5_1_fp32 - x_5_1_virtual_int8).abs()
+                    print(f"\n--- SSM Input Comparison (Mode 5-1 vs Mode 5-0) ---")
+                    print(f"  Mode 5-1 SSM input (raw FP32): first 5 = {x_5_1_fp32[0, 0, :5].tolist()}")
+                    print(f"  Mode 5-0 would use (virtual INT8): first 5 = {x_5_1_virtual_int8[0, 0, :5].tolist()}")
+                    print(f"  Difference (|FP32 - VirtualINT8|): max={ssm_input_diff.max().item():.6f}, mean={ssm_input_diff.mean().item():.6f}")
+                    # Scales
+                    print(f"\n--- Scales ---")
+                    print(f"  conv1d.input_scale:  {self.conv1d.input_scale:.10f}")
+                    print(f"  conv1d.output_scale: {self.conv1d.output_scale:.10f}")
+                    print(f"  x_proj.a (input_scale): {self.x_proj.a.item():.10f}")
+                    # x_proj 输出
+                    print(f"\n--- x_proj/dt_proj Output ---")
+                    print(f"  dt first 5: {dt_5_1[0, 0, :5].tolist()}")
+                    print(f"  B first 5: {B_5_1[0, 0, 0, :5].tolist()}")
+                    print(f"  C first 5: {C_5_1[0, 0, 0, :5].tolist()}")
+                    # SSM 输出 (使用 had() 之前的原始输出)
+                    print(f"\n--- SSM Output (before had()) ---")
+                    print(f"  y_ssm_out dtype: {y_5_1_ssm_out.dtype}")
+                    print(f"  y_ssm_out: min={y_5_1_ssm_out.min().item():.6f}, max={y_5_1_ssm_out.max().item():.6f}, mean={y_5_1_ssm_out.mean().item():.6f}")
+                    print(f"  y_ssm_out first 5: {y_5_1_ssm_out[0, 0, :5].tolist()}")
+                    print(f"{'='*80}\n")
         # ===== END DEBUG =====
 
         return out_5_1
@@ -1922,12 +1917,411 @@ class W8A8QMamba(nn.Module):
             True  # delta_softplus
         )
 
+        # ===== DEBUG: Mode 5-4 统一调试输出 =====
+        import os
+        if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+            # 统计 overflow (理论上，用原始 scale 量化超出 INT8 范围的值)
+            overflow_mask = torch.abs(x_quantized) > 127
+            overflow_count = overflow_mask.sum().item()
+            total_count = overflow_mask.numel()
+            overflow_ratio = overflow_count / total_count * 100
+
+            # 统计 QuarterScale 小值比例
+            small_value_count = is_small.sum().item()
+            small_value_ratio = small_value_count / total_count * 100
+
+            # 累积所有层的统计
+            if not hasattr(self, '_mode54_overflow_stats'):
+                self._mode54_overflow_stats = {'overflow': 0, 'total': 0, 'small': 0}
+            self._mode54_overflow_stats['overflow'] += overflow_count
+            self._mode54_overflow_stats['total'] += total_count
+            self._mode54_overflow_stats['small'] += small_value_count
+
+            # 最后一层打印详细信息
+            last_layer_idx = 47  # 1.4b=47, 2.8b=63, 130m=23
+            if self.layer_idx == last_layer_idx:
+                if not hasattr(self, '_mode54_debug_count'):
+                    self._mode54_debug_count = 0
+                self._mode54_debug_count += 1
+                if self._mode54_debug_count == 1:  # 只打印第一次
+                    print(f"\n{'='*80}")
+                    print(f"[Mode 5-4 - Layer {last_layer_idx+1}] Debug Output (QuarterScale)")
+                    print(f"{'='*80}")
+                    # 全局统计
+                    global_overflow_ratio = self._mode54_overflow_stats['overflow'] / self._mode54_overflow_stats['total'] * 100
+                    global_small_ratio = self._mode54_overflow_stats['small'] / self._mode54_overflow_stats['total'] * 100
+                    print(f"\n--- Overflow & Small Value Statistics (All Layers) ---")
+                    print(f"  Total overflow: {self._mode54_overflow_stats['overflow']} / {self._mode54_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
+                    print(f"  Small values (|q|<32, 4x precision): {self._mode54_overflow_stats['small']} / {self._mode54_overflow_stats['total']} = {global_small_ratio:.2f}%")
+                    # Conv1D 输出
+                    print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                    print(f"  x_fp32 raw: min={x_5_4_fp32.min().item():.4f}, max={x_5_4_fp32.max().item():.4f}, mean={x_5_4_fp32.mean().item():.4f}, std={x_5_4_fp32.std().item():.4f}")
+                    print(f"  x_fp32 first 5: {x_5_4_fp32[0, 0, :5].tolist()}")
+                    print(f"  x_mixed (after QuarterScale) first 5: {x_5_4_mixed[0, 0, :5].tolist()}")
+                    print(f"  x_int8 (for x_proj) first 5: {x_5_4_int8[0, 0, :5].tolist()}")
+                    print(f"  Layer overflow: {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
+                    print(f"  Layer small values: {small_value_count} / {total_count} = {small_value_ratio:.2f}%")
+                    # Scales
+                    print(f"\n--- Scales ---")
+                    print(f"  conv1d.input_scale:  {self.conv1d.input_scale:.10f}")
+                    print(f"  conv1d.output_scale: {scale:.10f}")
+                    print(f"  quarter_scale: {quarter_scale:.10f}")
+                    print(f"  x_proj.a (input_scale): {self.x_proj.a.item():.10f}")
+                    # x_proj 输出
+                    print(f"\n--- x_proj/dt_proj Output ---")
+                    print(f"  dt first 5: {dt_5_4[0, 0, :5].tolist()}")
+                    print(f"  B first 5: {B_5_4[0, 0, 0, :5].tolist()}")
+                    print(f"  C first 5: {C_5_4[0, 0, 0, :5].tolist()}")
+                    # SSM 输出
+                    print(f"\n--- SSM Output ---")
+                    print(f"  y: min={y_5_4.min().item():.6f}, max={y_5_4.max().item():.6f}, mean={y_5_4.mean().item():.6f}")
+                    print(f"  y first 5: {y_5_4[0, 0, :5].tolist()}")
+                    print(f"{'='*80}\n")
+        # ===== END DEBUG =====
+
         # === Step 6: had + out_proj ===
         y_5_4_fp16 = y_5_4.half() if y_5_4.dtype != torch.float16 else y_5_4
         y_5_4 = self.had(y_5_4_fp16)
         out_5_4 = self.out_proj(y_5_4)
 
         return out_5_4
+
+    def forward_mode5_6(self, hidden_states, inference_params=None):
+        """
+        Mode 5-6: QuarterScale + VirtualBiasedLog2Quant
+        - Conv1D: INT8 → FP32 输出
+        - QuarterLog2: 小值 (|q| < 32) 用 scale/4 (4× 精度), 大值用 8-bit Log2 (可表示极大值)
+        - x_proj: 重新量化回 INT8 (与 Mode 5-0 一致)
+        - SSM: FP32 mixed 输入
+
+        关键设计:
+        - 高精度区域: |x| <= 32 * (scale/4) = 8*scale，用 scale/4 (4× 精度)
+        - Log2区域: |x| > 8*scale，用 x_quant = sign(x) * (max_quarter + 2^k * log_scale)
+        - k 是 8 bits (0-255)
+        - log_scale = scale/4 (与 quarter_scale 相同，保证平滑过渡)
+        - x_proj 精度与 Mode 5-0 完全一致（退化回原始精度）
+        """
+        import quant_causal_conv1d_cuda
+        import quant_sscan_cuda
+
+        batch, seqlen, dim = hidden_states.shape
+
+        # === Step 1: in_proj (INT8) ===
+        xz = self.in_proj.to_seqlen_last(hidden_states)
+        x_5_6, z_5_6 = xz.chunk(2, dim=1)
+
+        # === Step 2: Conv1D (INT8 → FP32) ===
+        x_5_6_fp32 = quant_causal_conv1d_cuda.fwd_mode5(
+            x_5_6, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.bias_scale, self.conv1d.bias, True
+        )
+
+        # === Step 3: QuarterLog2 Virtual Quantization ===
+        # 使用 roundf_like 模拟 C++ roundf()
+        def roundf_like(x):
+            return torch.where(x >= 0, torch.floor(x + 0.5), torch.ceil(x - 0.5))
+
+        scale = self.conv1d.output_scale
+        quarter_scale = scale / 4.0
+        max_quarter = 32 * quarter_scale  # = 8 * scale (高精度区域边界)
+        log_scale = quarter_scale  # 与 quarter_scale 相同，保证平滑过渡
+
+        abs_x = torch.abs(x_5_6_fp32)
+        sign_x = torch.sign(x_5_6_fp32)
+
+        # 高精度区域: |x| <= max_quarter
+        is_small = abs_x <= max_quarter
+        x_small = roundf_like(x_5_6_fp32 / quarter_scale).clamp(-127, 127) * quarter_scale
+
+        # Log2区域: |x| > max_quarter
+        # x_quant = sign(x) * (max_quarter + 2^k × log_scale)
+        # 其中 k = floor(log2((|x| - max_quarter) / log_scale))
+        residual = abs_x - max_quarter
+        # 避免 log2(0) 或 log2(负数)，对于 is_small 的元素，residual 可能为负
+        residual_safe = torch.clamp(residual, min=log_scale)
+        k = torch.floor(torch.log2(residual_safe / log_scale))
+        k = torch.clamp(k, min=0, max=255)  # 8 bits
+        x_log2 = sign_x * (max_quarter + (2.0 ** k) * log_scale)
+
+        # 组合: 小值用 QuarterScale，大值用 Log2
+        x_5_6_mixed = torch.where(is_small, x_small, x_log2)
+
+        # === Step 4: x_proj (重新量化回 INT8，与 Mode 5-0 一致) ===
+        x_5_6_int8 = roundf_like(x_5_6_mixed / scale).clamp(-128, 127).to(torch.int8)
+        x_5_6_reshape = rearrange(x_5_6_int8, "b d l -> b l d").contiguous()
+        x_dbl_5_6 = self.x_proj(x_5_6_reshape)
+        dt_5_6, B_5_6, C_5_6 = torch.split(x_dbl_5_6, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_5_6 = self.dt_proj.to_seqlen_last(dt_5_6.contiguous())
+        B_5_6 = rearrange(B_5_6, "b l dstate -> b 1 dstate l", l=seqlen).contiguous()
+        C_5_6 = rearrange(C_5_6, "b l dstate -> b 1 dstate l", l=seqlen).contiguous()
+
+        # === Step 5: SSM (FP32 mixed 输入) ===
+        def ensure_shape_1(t):
+            return t.view(1) if t.dim() == 0 else t
+
+        y_5_6, _ = quant_sscan_cuda.fwd_mode5(
+            x_5_6_mixed,  # FP32 输入 (QuarterLog2 量化后)
+            dt_5_6, ensure_shape_1(self.selective_scan.dt_scale),
+            self.selective_scan.A_log, ensure_shape_1(self.selective_scan.A_scale),
+            B_5_6, ensure_shape_1(self.selective_scan.B_scale),
+            C_5_6, ensure_shape_1(self.selective_scan.C_scale),
+            ensure_shape_1(self.selective_scan.ssm_state_scale),
+            self.selective_scan.D, ensure_shape_1(self.selective_scan.D_scale),
+            z_5_6, ensure_shape_1(self.selective_scan.z_scale),
+            self.selective_scan.dt_bias, ensure_shape_1(self.selective_scan.dt_bias_scale),
+            True  # delta_softplus
+        )
+
+        # ===== DEBUG: Mode 5-6 统一调试输出 =====
+        import os
+        if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+            # 用原始 scale 判断 overflow (理论上，因为 Log2 可表示任意大值，不应该有 overflow)
+            x_quantized_orig = roundf_like(x_5_6_fp32 / scale)
+            overflow_mask = torch.abs(x_quantized_orig) > 127
+            overflow_count = overflow_mask.sum().item()
+            total_count = overflow_mask.numel()
+            overflow_ratio = overflow_count / total_count * 100
+
+            # 统计 QuarterScale 小值比例
+            small_value_count = is_small.sum().item()
+            small_value_ratio = small_value_count / total_count * 100
+
+            # 统计 Log2 区域的 k 值分布
+            log2_mask = ~is_small
+            log2_count = log2_mask.sum().item()
+            if log2_count > 0:
+                k_values = k[log2_mask]
+                k_mean = k_values.mean().item()
+                k_max = k_values.max().item()
+            else:
+                k_mean = 0
+                k_max = 0
+
+            # 累积所有层的统计
+            if not hasattr(self, '_mode56_overflow_stats'):
+                self._mode56_overflow_stats = {'overflow': 0, 'total': 0, 'small': 0, 'log2': 0, 'k_sum': 0}
+            self._mode56_overflow_stats['overflow'] += overflow_count
+            self._mode56_overflow_stats['total'] += total_count
+            self._mode56_overflow_stats['small'] += small_value_count
+            self._mode56_overflow_stats['log2'] += log2_count
+
+            # 最后一层打印详细信息
+            last_layer_idx = 47  # 1.4b=47, 2.8b=63, 130m=23
+            if self.layer_idx == last_layer_idx:
+                if not hasattr(self, '_mode56_debug_count'):
+                    self._mode56_debug_count = 0
+                self._mode56_debug_count += 1
+                if self._mode56_debug_count == 1:  # 只打印第一次
+                    print(f"\n{'='*80}")
+                    print(f"[Mode 5-6 - Layer {last_layer_idx+1}] Debug Output (QuarterLog2)")
+                    print(f"{'='*80}")
+                    # 全局统计
+                    global_overflow_ratio = self._mode56_overflow_stats['overflow'] / self._mode56_overflow_stats['total'] * 100
+                    global_small_ratio = self._mode56_overflow_stats['small'] / self._mode56_overflow_stats['total'] * 100
+                    global_log2_ratio = self._mode56_overflow_stats['log2'] / self._mode56_overflow_stats['total'] * 100
+                    print(f"\n--- QuarterLog2 Statistics (All Layers) ---")
+                    print(f"  Original overflow (if using scale): {self._mode56_overflow_stats['overflow']} / {self._mode56_overflow_stats['total']} = {global_overflow_ratio:.4f}%")
+                    print(f"  QuarterScale region (|x|<=8*scale): {self._mode56_overflow_stats['small']} / {self._mode56_overflow_stats['total']} = {global_small_ratio:.2f}%")
+                    print(f"  Log2 region (|x|>8*scale): {self._mode56_overflow_stats['log2']} / {self._mode56_overflow_stats['total']} = {global_log2_ratio:.2f}%")
+                    # Conv1D 输出
+                    print(f"\n--- Conv1D Output (Layer {last_layer_idx+1}) ---")
+                    print(f"  x_fp32 raw: min={x_5_6_fp32.min().item():.4f}, max={x_5_6_fp32.max().item():.4f}, mean={x_5_6_fp32.mean().item():.4f}, std={x_5_6_fp32.std().item():.4f}")
+                    print(f"  x_fp32 first 5: {x_5_6_fp32[0, 0, :5].tolist()}")
+                    print(f"  x_mixed (after QuarterLog2) first 5: {x_5_6_mixed[0, 0, :5].tolist()}")
+                    print(f"  x_int8 (for x_proj) first 5: {x_5_6_int8[0, 0, :5].tolist()}")
+                    print(f"  Layer overflow: {overflow_count} / {total_count} = {overflow_ratio:.4f}%")
+                    print(f"  Layer small values: {small_value_count} / {total_count} = {small_value_ratio:.2f}%")
+                    print(f"  Layer log2 values: {log2_count} / {total_count}, k_mean={k_mean:.2f}, k_max={k_max:.0f}")
+                    # Scales
+                    print(f"\n--- Scales ---")
+                    print(f"  conv1d.output_scale: {scale:.10f}")
+                    print(f"  quarter_scale (scale/4): {quarter_scale:.10f}")
+                    print(f"  max_quarter (32*quarter_scale): {max_quarter:.10f}")
+                    print(f"  log_scale (=quarter_scale): {log_scale:.10f}")
+                    # x_proj 输出
+                    print(f"\n--- x_proj/dt_proj Output ---")
+                    print(f"  dt first 5: {dt_5_6[0, 0, :5].tolist()}")
+                    print(f"  B first 5: {B_5_6[0, 0, 0, :5].tolist()}")
+                    print(f"  C first 5: {C_5_6[0, 0, 0, :5].tolist()}")
+                    # SSM 输出
+                    print(f"\n--- SSM Output ---")
+                    print(f"  y: min={y_5_6.min().item():.6f}, max={y_5_6.max().item():.6f}, mean={y_5_6.mean().item():.6f}")
+                    print(f"  y first 5: {y_5_6[0, 0, :5].tolist()}")
+                    print(f"{'='*80}\n")
+        # ===== END DEBUG =====
+
+        # === Step 6: had + out_proj ===
+        y_5_6_fp16 = y_5_6.half() if y_5_6.dtype != torch.float16 else y_5_6
+        y_5_6 = self.had(y_5_6_fp16)
+        out_5_6 = self.out_proj(y_5_6)
+
+        return out_5_6
+
+    def forward_mode5_7(self, hidden_states, inference_params=None):
+        """
+        Mode 5-7: Three-Segment Uniform Quantization (三段均匀量化)
+        - Conv1D: INT8 → FP32 输出
+        - Three-Segment:
+          - High precision: scale/4 (0.25x), ±63 levels, range [-15.75*s, +15.75*s] where s=scale
+          - Mid precision:  scale (1x),     ±127 levels, range ±[16*s, 143*s]
+          - Low precision:  scale*4 (4x),   ±63 levels, range ±[144*s, 396*s]
+        - x_proj: 重新量化回 INT8 (与 Mode 5-0 一致)
+        - SSM: FP32 mixed 输入
+
+        设计思路:
+        - 三段均匀步长，每段都是均匀量化
+        - 总量化级别: 63 + 127 + 63 = 253，可用 8-bit 编码
+        - 小值区域 4x 精度，中值区域原始精度，大值区域 1/4 精度但覆盖更大范围
+        - 相比 5-6 的 Log2，5-7 中大值区域是均匀步长而非指数增长
+        """
+        import quant_causal_conv1d_cuda
+        import quant_sscan_cuda
+
+        batch, seqlen, dim = hidden_states.shape
+
+        # === Step 1: in_proj (INT8) ===
+        xz = self.in_proj.to_seqlen_last(hidden_states)
+        x_5_7, z_5_7 = xz.chunk(2, dim=1)
+
+        # === Step 2: Conv1D (INT8 → FP32) ===
+        x_5_7_fp32 = quant_causal_conv1d_cuda.fwd_mode5(
+            x_5_7, self.conv1d.input_scale,
+            self.conv1d.weight, self.conv1d.weight_scale,
+            self.conv1d.bias_scale, self.conv1d.bias, True
+        )
+
+        # === Step 3: Three-Segment Virtual Quantization ===
+        def roundf_like(x):
+            return torch.where(x >= 0, torch.floor(x + 0.5), torch.ceil(x - 0.5))
+
+        scale = self.conv1d.output_scale
+        high_scale = scale / 4.0   # 高精度区域步长
+        mid_scale = scale          # 中精度区域步长 (原始)
+        low_scale = scale * 4.0    # 低精度区域步长
+
+        # 区域边界 (以 scale=1 为例):
+        # - 高精度: |x| <= 15.75 (即 63 * 0.25), q ∈ [-63, 63]
+        # - 中精度: 16 <= |x| <= 143 (即 q ∈ [16, 143], 共 128 级)
+        # - 低精度: |x| > 143, q ∈ [0, 63], 偏移从 mid_max 开始
+        high_max = 63 * high_scale   # = 15.75 * scale
+        mid_max = 143 * mid_scale    # = 143 * scale
+
+        abs_x = torch.abs(x_5_7_fp32)
+        sign_x = torch.sign(x_5_7_fp32)
+
+        # 高精度区域: |x| <= high_max
+        is_high = abs_x <= high_max
+        x_high = roundf_like(x_5_7_fp32 / high_scale).clamp(-63, 63) * high_scale
+
+        # 中精度区域: high_max < |x| <= mid_max
+        # 直接用原始 scale 量化，q 范围自然在 [16, 143]
+        is_mid = (abs_x > high_max) & (abs_x <= mid_max)
+        q_mid_raw = roundf_like(abs_x / mid_scale)  # 直接用原始 scale 量化
+        q_mid = q_mid_raw.clamp(16, 143)  # 限制在中精度区域范围
+        x_mid = sign_x * q_mid * mid_scale
+
+        # 低精度区域: |x| > mid_max
+        # 偏移从 mid_max 开始，保证连续性
+        is_low = abs_x > mid_max
+        offset_from_mid_max = abs_x - mid_max
+        q_low = roundf_like(offset_from_mid_max / low_scale).clamp(0, 63)  # 0-63 levels
+        x_low = sign_x * (mid_max + q_low * low_scale)
+
+        # 组合三段
+        x_5_7_mixed = torch.where(is_high, x_high,
+                     torch.where(is_mid, x_mid, x_low))
+
+        # === Step 4: x_proj (重新量化回 INT8，与 Mode 5-0 一致) ===
+        x_5_7_int8 = roundf_like(x_5_7_mixed / scale).clamp(-128, 127).to(torch.int8)
+        x_5_7_reshape = rearrange(x_5_7_int8, "b d l -> b l d").contiguous()
+        x_dbl_5_7 = self.x_proj(x_5_7_reshape)
+        dt_5_7, B_5_7, C_5_7 = torch.split(x_dbl_5_7, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        dt_5_7 = self.dt_proj.to_seqlen_last(dt_5_7.contiguous())
+        B_5_7 = rearrange(B_5_7, "b l dstate -> b 1 dstate l", l=seqlen).contiguous()
+        C_5_7 = rearrange(C_5_7, "b l dstate -> b 1 dstate l", l=seqlen).contiguous()
+
+        # === Step 5: SSM (FP32 mixed 输入) ===
+        def ensure_shape_1(t):
+            return t.view(1) if t.dim() == 0 else t
+
+        y_5_7, _ = quant_sscan_cuda.fwd_mode5(
+            x_5_7_mixed,  # FP32 输入 (ThreeSegment 量化后)
+            dt_5_7, ensure_shape_1(self.selective_scan.dt_scale),
+            self.selective_scan.A_log, ensure_shape_1(self.selective_scan.A_scale),
+            B_5_7, ensure_shape_1(self.selective_scan.B_scale),
+            C_5_7, ensure_shape_1(self.selective_scan.C_scale),
+            ensure_shape_1(self.selective_scan.ssm_state_scale),
+            self.selective_scan.D, ensure_shape_1(self.selective_scan.D_scale),
+            z_5_7, ensure_shape_1(self.selective_scan.z_scale),
+            self.selective_scan.dt_bias, ensure_shape_1(self.selective_scan.dt_bias_scale),
+            True  # delta_softplus
+        )
+
+        # ===== DEBUG: Mode 5-7 统一调试输出 =====
+        import os
+        if os.environ.get('DEBUG_MODE50_VS_MODE51', 'false').lower() == 'true':
+            # 统计各区域比例
+            high_count = is_high.sum().item()
+            mid_count = is_mid.sum().item()
+            low_count = is_low.sum().item()
+            total_count = abs_x.numel()
+
+            # 用原始 scale 判断 overflow
+            x_quantized_orig = roundf_like(x_5_7_fp32 / scale)
+            overflow_mask = torch.abs(x_quantized_orig) > 127
+            overflow_count = overflow_mask.sum().item()
+
+            # 累积所有层的统计
+            if not hasattr(self, '_mode57_stats'):
+                self._mode57_stats = {'high': 0, 'mid': 0, 'low': 0, 'total': 0, 'overflow': 0}
+            self._mode57_stats['high'] += high_count
+            self._mode57_stats['mid'] += mid_count
+            self._mode57_stats['low'] += low_count
+            self._mode57_stats['total'] += total_count
+            self._mode57_stats['overflow'] += overflow_count
+
+            # 最后一层打印详细信息
+            last_layer_idx = 23  # 130m=23, 1.4b=47, 2.8b=63
+            if self.layer_idx == last_layer_idx:
+                if not hasattr(self, '_mode57_debug_count'):
+                    self._mode57_debug_count = 0
+                self._mode57_debug_count += 1
+                if self._mode57_debug_count == 1:  # 只打印第一次
+                    print(f"\n{'='*80}")
+                    print(f"[Mode 5-7 - Layer {last_layer_idx+1}] Debug Output (ThreeSegment)")
+                    print(f"{'='*80}")
+                    # 全局统计
+                    global_high_ratio = self._mode57_stats['high'] / self._mode57_stats['total'] * 100
+                    global_mid_ratio = self._mode57_stats['mid'] / self._mode57_stats['total'] * 100
+                    global_low_ratio = self._mode57_stats['low'] / self._mode57_stats['total'] * 100
+                    global_overflow_ratio = self._mode57_stats['overflow'] / self._mode57_stats['total'] * 100
+                    print(f"\n--- ThreeSegment Statistics (All Layers) ---")
+                    print(f"  Original overflow (if using scale): {global_overflow_ratio:.4f}%")
+                    print(f"  High precision region (|x|<=15.75*s): {global_high_ratio:.2f}%")
+                    print(f"  Mid precision region (16s<=|x|<=143s): {global_mid_ratio:.2f}%")
+                    print(f"  Low precision region (|x|>143s): {global_low_ratio:.2f}%")
+                    # Scales
+                    print(f"\n--- Scales ---")
+                    print(f"  scale: {scale:.10f}")
+                    print(f"  high_scale (scale/4): {high_scale:.10f}")
+                    print(f"  mid_scale (scale): {mid_scale:.10f}")
+                    print(f"  low_scale (scale*4): {low_scale:.10f}")
+                    # 边界
+                    low_max = mid_max + 63 * low_scale  # 最大可表示值
+                    print(f"\n--- Boundaries ---")
+                    print(f"  high_max: {high_max:.6f} (63 * scale/4)")
+                    print(f"  mid_max: {mid_max:.6f} (143 * scale)")
+                    print(f"  low_max: {low_max:.6f} (mid_max + 63 * scale*4)")
+                    print(f"{'='*80}\n")
+        # ===== END DEBUG =====
+
+        # === Step 6: had + out_proj ===
+        y_5_7_fp16 = y_5_7.half() if y_5_7.dtype != torch.float16 else y_5_7
+        y_5_7 = self.had(y_5_7_fp16)
+        out_5_7 = self.out_proj(y_5_7)
+
+        return out_5_7
 
     def forward_mode6_0_eval(self, hidden_states, inference_params=None):
         """
@@ -2690,169 +3084,3 @@ class W8A8QMamba(nn.Module):
 
         return out
 
-# ===== DUAL MODE COMPARISON HELPER FUNCTION =====
-# Global accumulator for all samples
-_dual_mode_stats = {
-    'sample_count': 0,
-    'total_mean_diff': 0.0,
-    'total_max_diff': 0.0,
-    'all_diffs': []
-}
-
-def dual_mode_compare_ssm(layer_self, x, dt, B, C, z, output_scale):
-    """
-    Helper function to compare Mode 2-0 vs Mode 2-1 SSM outputs.
-    Called when DUAL_MODE_DEBUG=true.
-    Accumulates statistics across ALL samples.
-
-    Args:
-        layer_self: The MambaLayer instance
-        x: Conv1D output (INT8)
-        dt, B, C, z: SSM inputs
-        output_scale: Conv1D output scale for dequantization
-    """
-    import torch
-    import os
-    global _dual_mode_stats
-
-    # Only print details for first sample
-    if _dual_mode_stats['sample_count'] == 0:
-        print(f"\n{'='*80}")
-        print(f"🔬 DUAL MODE COMPARISON - Layer {layer_self.layer_idx}")
-        print(f"{'='*80}")
-        print(f"📊 Conv1D Output (Sample 1, shared input for both modes):")
-        print(f"    dtype: {x.dtype}")
-        print(f"    first 5 values [0,0,:5]: {x[0, 0, :5].tolist()}")
-        print(f"    output_scale: {output_scale:.10f}")
-        print(f"")
-
-    # Prepare inputs for BOTH modes
-    x_mode20_fp32 = x.float() * output_scale  # Mode 2-0: dequantize to FP32
-    x_mode21_int8 = x  # Mode 2-1: keep INT8
-
-    if _dual_mode_stats['sample_count'] == 0:
-        print(f"🔀 Mode 2-0 (CUDA INT8 with FP32 input):")
-        print(f"    u dtype: torch.float32")
-        print(f"    u first 5 values: {x_mode20_fp32[0, 0, :5].tolist()}")
-        print(f"")
-
-        print(f"🔀 Mode 2-1 (PyTorch INT8 direct):")
-        print(f"    u dtype: torch.int8")
-        print(f"    u first 5 values: {x_mode21_int8[0, 0, :5].tolist()}")
-        print(f"    u first 5 (dequantized for ref): {(x_mode21_int8.float() * output_scale)[0, 0, :5].tolist()}")
-        print(f"")
-
-        # Run BOTH SSM kernels and compare outputs
-        print(f"🚀 Running BOTH SSM kernels for ALL 100 samples...")
-
-    # Save original environment
-    original_env = {
-        'SSM_USE_PYTORCH_INT8': os.environ.get('SSM_USE_PYTORCH_INT8', 'false'),
-        'SSM_USE_CUDA_FOR_FP32': os.environ.get('SSM_USE_CUDA_FOR_FP32', 'false'),
-        'DUAL_MODE_DEBUG': 'true'
-    }
-
-    # Temporarily disable debug mode to avoid infinite recursion
-    os.environ['DUAL_MODE_DEBUG'] = 'false'
-
-    try:
-        # Run Mode 2-0: CUDA INT8 SSM with FP32 input
-        os.environ['SSM_USE_PYTORCH_INT8'] = 'false'
-        os.environ['SSM_USE_CUDA_FOR_FP32'] = 'true'
-        y_ssm_mode20 = layer_self.selective_scan.forward(x_mode20_fp32, dt, B, C, z=z, return_last_state=False)
-
-        # Run Mode 2-1: PyTorch INT8 SSM with INT8 input
-        os.environ['SSM_USE_PYTORCH_INT8'] = 'true'
-        os.environ['SSM_USE_CUDA_FOR_FP32'] = 'false'
-        y_ssm_mode21 = layer_self.selective_scan.forward(x_mode21_int8, dt, B, C, z=z, return_last_state=False)
-
-        # Continue through had + out_proj to get final layer output
-        y_had_mode20 = layer_self.had(y_ssm_mode20)
-        y_had_mode21 = layer_self.had(y_ssm_mode21)
-
-        out_mode20 = layer_self.out_proj(y_had_mode20)
-        out_mode21 = layer_self.out_proj(y_had_mode21)
-
-        # Compute SSM output difference
-        diff_ssm = (y_ssm_mode20.float() - y_ssm_mode21.float()).abs()
-        mean_diff_ssm = diff_ssm.mean().item()
-        max_diff_ssm = diff_ssm.max().item()
-
-        # Compute final layer output difference
-        diff_out = (out_mode20.float() - out_mode21.float()).abs()
-        mean_diff_out = diff_out.mean().item()
-        max_diff_out = diff_out.max().item()
-
-        # Accumulate statistics
-        _dual_mode_stats['sample_count'] += 1
-        _dual_mode_stats['total_mean_diff'] += mean_diff_ssm
-        _dual_mode_stats['total_max_diff'] = max(max_diff_ssm, _dual_mode_stats['total_max_diff'])
-        _dual_mode_stats['all_diffs'].append(mean_diff_ssm)
-
-        # Also track layer output differences
-        if 'total_mean_diff_out' not in _dual_mode_stats:
-            _dual_mode_stats['total_mean_diff_out'] = 0.0
-            _dual_mode_stats['total_max_diff_out'] = 0.0
-            _dual_mode_stats['all_diffs_out'] = []
-
-        _dual_mode_stats['total_mean_diff_out'] += mean_diff_out
-        _dual_mode_stats['total_max_diff_out'] = max(max_diff_out, _dual_mode_stats['total_max_diff_out'])
-        _dual_mode_stats['all_diffs_out'].append(mean_diff_out)
-
-        # Print details for first sample only
-        if _dual_mode_stats['sample_count'] == 1:
-            print(f"")
-            print(f"📈 SSM Output Comparison (Sample 1):")
-            print(f"    Mode 2-0 first 5 values [0,0,:5]: {y_ssm_mode20[0, 0, :5].tolist()}")
-            print(f"    Mode 2-1 first 5 values [0,0,:5]: {y_ssm_mode21[0, 0, :5].tolist()}")
-            print(f"    Mean absolute diff: {mean_diff_ssm:.6f}")
-            print(f"    Max absolute diff: {max_diff_ssm:.6f}")
-            print(f"")
-            print(f"📈 After Hadamard (Sample 1):")
-            print(f"    Mode 2-0 had output [0,0,:5]: {y_had_mode20[0, 0, :5].tolist()}")
-            print(f"    Mode 2-1 had output [0,0,:5]: {y_had_mode21[0, 0, :5].tolist()}")
-            print(f"")
-            print(f"📈 Final Layer Output (Sample 1):")
-            print(f"    Mode 2-0 first 5 values [0,0,:5]: {out_mode20[0, 0, :5].tolist()}")
-            print(f"    Mode 2-1 first 5 values [0,0,:5]: {out_mode21[0, 0, :5].tolist()}")
-            print(f"    Mean absolute diff: {mean_diff_out:.6f}")
-            print(f"    Max absolute diff: {max_diff_out:.6f}")
-            print(f"")
-            print(f"⏳ Continuing to compare remaining samples (progress shown by lm_eval)...")
-            print(f"{'='*80}\n")
-
-        # Print summary after all samples
-        if _dual_mode_stats['sample_count'] == 100:
-            avg_mean_diff_ssm = _dual_mode_stats['total_mean_diff'] / 100
-            avg_mean_diff_out = _dual_mode_stats['total_mean_diff_out'] / 100
-            print(f"\n{'='*80}")
-            print(f"📊 DUAL MODE COMPARISON - FINAL SUMMARY (100 samples)")
-            print(f"{'='*80}")
-            print(f"")
-            print(f"🔹 SSM Output Differences:")
-            print(f"  Average mean absolute diff: {avg_mean_diff_ssm:.6f}")
-            print(f"  Maximum absolute diff: {_dual_mode_stats['total_max_diff']:.6f}")
-            import statistics
-            print(f"  Min: {min(_dual_mode_stats['all_diffs']):.6f}")
-            print(f"  Max: {max(_dual_mode_stats['all_diffs']):.6f}")
-            print(f"  Median: {statistics.median(_dual_mode_stats['all_diffs']):.6f}")
-            print(f"")
-            print(f"🔹 Final Layer Output Differences (after had + out_proj):")
-            print(f"  Average mean absolute diff: {avg_mean_diff_out:.6f}")
-            print(f"  Maximum absolute diff: {_dual_mode_stats['total_max_diff_out']:.6f}")
-            print(f"  Min: {min(_dual_mode_stats['all_diffs_out']):.6f}")
-            print(f"  Max: {max(_dual_mode_stats['all_diffs_out']):.6f}")
-            print(f"  Median: {statistics.median(_dual_mode_stats['all_diffs_out']):.6f}")
-            print(f"")
-            if avg_mean_diff_out < 0.001:
-                print(f"✅ Mode 2-0 and Mode 2-1 produce nearly IDENTICAL layer outputs!")
-                print(f"   Difference < 0.001 is within floating-point precision.")
-            else:
-                print(f"⚠️  Mode 2-0 and Mode 2-1 have measurable differences in layer outputs.")
-                print(f"   This could lead to different final predictions.")
-            print(f"{'='*80}\n")
-
-    finally:
-        # Restore original environment
-        for key, value in original_env.items():
-            os.environ[key] = value

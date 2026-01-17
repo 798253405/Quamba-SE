@@ -176,8 +176,6 @@ percentileRangeResults/*.npz
 
 # 子模块（用submodule管理）
 3rdparty/cutlass/
-3rdparty/fast-hadamard-transform/
-3rdparty/mamba/
 3rdparty/causal-conv1d/
 
 # 临时测试脚本

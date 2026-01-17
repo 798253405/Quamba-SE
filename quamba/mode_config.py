@@ -8,22 +8,27 @@ Usage:
     from quamba.mode_config import setup_quamba_mode
 
     # In main.py or test script
-    setup_quamba_mode('2-4')  # Set Mode 2-4
+    setup_quamba_mode('5-0')  # Set Mode 5-0
 
     # Or use environment variable
-    export QUAMBA_MODE=2-4
+    export QUAMBA_MODE=5-0
     setup_quamba_mode()  # Auto-detect from env
 
 Available Modes:
     0      : Baseline INT8 CUDA
-    2-0    : CUDA INT8 + Requantization
-    2-1    : PyTorch INT8 Direct
-    2-2    : FP32 PyTorch (INT8 Grid)
-    2-3    : TRUE FP32 Conv + INT8 SSM
-    2-4    : TRUE FP32 Conv + FP32 SSM (Mode 2-2 same)
-    3      : Hybrid Precision (FP32 Conv/SSM + INT8 Linear)
+    4      : Selective Grid FP32
     5      : Dual-Path Mode 5 (FP32 Conv/SSM + Mode 0 comparison)
+    5-0    : Virtual INT8 Eval
+    5-1    : FP32 No Quantization Eval
+    5-2    : VirtualQuant+Outlier Eval
+    5-3    : Dual-Scale INT8 Eval
+    5-4    : QuarterScale 4x Precision Eval
     6      : Dual-Path Mode 6 (FP32 output feeds both paths)
+    6-0    : INT8+FP32_x_proj Eval
+    6-1    : FP32+FP32_x_proj Eval
+    6-2    : VirtualQuant+FP32_x_proj Eval
+    6-3    : HalfScale 2x Precision Eval
+    6-4    : CalibratedDualScale+FP32_x_proj Eval
 """
 
 import os
@@ -36,52 +41,6 @@ MODE_CONFIG = {
         'name': 'Baseline INT8 CUDA',
         'env': {},
         'description': 'Original INT8 CUDA kernel baseline'
-    },
-    '2-0': {
-        'name': 'CUDA INT8 + Requantization',
-        'env': {
-            'FLOAT_SIM_ASIC_INT8': 'true',
-            'SSM_USE_CUDA_FOR_FP32': 'true'
-        },
-        'description': 'FP32 (INT8 grid) → requantize → CUDA INT8 SSM'
-    },
-    '2-1': {
-        'name': 'PyTorch INT8 Direct',
-        'env': {
-            'FLOAT_SIM_ASIC_INT8': 'true',
-            'SSM_USE_PYTORCH_INT8': 'true'
-        },
-        'description': 'FP32 (INT8 grid) → requantize → PyTorch INT8 SSM'
-    },
-    '2-2': {
-        'name': 'FP32 PyTorch (INT8 Grid)',
-        'env': {
-            'FLOAT_SIM_ASIC_INT8': 'true'
-        },
-        'description': 'Conv1D: INT8 → FP32 (INT8 grid), SSM: Mode 2-2 FP32'
-    },
-    '2-3': {
-        'name': 'TRUE FP32 Conv + INT8 SSM',
-        'env': {
-            'FLOAT_SIM_ASIC_INT8': 'true',
-            'CONV1D_MODE23_FP32': 'true'
-        },
-        'description': 'Conv1D: TRUE FP32, SSM: PyTorch INT8 (with requantization)'
-    },
-    '2-4': {
-        'name': 'TRUE FP32 Conv + FP32 SSM',
-        'env': {
-            'FLOAT_SIM_ASIC_INT8': 'true',
-            'CONV1D_MODE24_FP32': 'true'
-        },
-        'description': 'Conv1D: TRUE FP32, SSM: Mode 2-2 same FP32'
-    },
-    '3': {
-        'name': 'Hybrid Precision',
-        'env': {
-            'CONV1D_MODE3_FP32': 'true'
-        },
-        'description': 'FP32/FP16 input + FP32 Conv/SSM + INT8 Linear'
     },
     '4': {
         'name': 'Selective Grid FP32',
@@ -121,6 +80,16 @@ MODE_CONFIG = {
         'env': {},
         'description': 'Single path: QuarterScale (small |q|<32 uses scale/4 for 4x precision), x_proj INT8 (same as 5-0)'
     },
+    '5-6': {
+        'name': 'Mode 5-6 QuarterLog2 Eval',
+        'env': {},
+        'description': 'Single path: QuarterScale (|q|<32 uses scale/4) + VirtualBiasedLog2 (|q|>=32 uses 8-bit log2), x_proj INT8'
+    },
+    '5-7': {
+        'name': 'Mode 5-7 ThreeSegment Eval',
+        'env': {},
+        'description': 'Single path: Three-segment quantization (high: scale/4 ±63, mid: scale ±127, low: scale*4 ±63), x_proj INT8'
+    },
     '6': {
         'name': 'Dual-Path Mode 6',
         'env': {},
@@ -156,12 +125,7 @@ MODE_CONFIG = {
 
 # All possible mode environment variables
 ALL_MODE_ENV_VARS = [
-    'FLOAT_SIM_ASIC_INT8',
-    'SSM_USE_CUDA_FOR_FP32',
-    'SSM_USE_PYTORCH_INT8',
-    'CONV1D_MODE23_FP32',
     'CONV1D_MODE24_FP32',
-    'CONV1D_MODE3_FP32',
     'CONV1D_MODE4_SELECTIVE_GRID'
 ]
 
@@ -254,22 +218,26 @@ def _get_conv1d_kernel_name(mode: str) -> str:
         return "quant_causal_conv1d_cuda.fwd_mode5 + DualScale (CUDA FP32 + dual INT8 grid)"
     elif mode == '5-4':
         return "quant_causal_conv1d_cuda.fwd_mode5 + QuarterScale (CUDA FP32 + scale/4 for small values)"
-    elif mode == '6-3':
-        return "quant_causal_conv1d_cuda.fwd_mode5 + HalfScale (CUDA FP32 + scale/2 for small values)"
+    elif mode == '5-6':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + QuarterLog2 (CUDA FP32 + scale/4 for small + 8-bit log2 for large)"
+    elif mode == '5-7':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + ThreeSegment (CUDA FP32 + scale/4 ±63 + scale ±127 + scale*4 ±63)"
     elif mode == '6':
         return "quant_causal_conv1d_cuda.fwd_mode6 (CUDA FP32 output, dual-path)"
+    elif mode == '6-0':
+        return "quant_causal_conv1d_cuda.fwd (CUDA INT8 kernel)"
+    elif mode == '6-1':
+        return "quant_causal_conv1d_cuda.fwd_mode5 (CUDA FP32 output)"
+    elif mode == '6-2':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + VirtualQuant (CUDA FP32 + INT8 grid + outlier)"
+    elif mode == '6-3':
+        return "quant_causal_conv1d_cuda.fwd_mode5 + HalfScale (CUDA FP32 + scale/2 for small values)"
     elif mode == '6-4':
         return "quant_causal_conv1d_cuda.fwd_mode5 + CalibratedDualScale (CUDA FP32 + α=1.0 outlier scale)"
     elif env.get('CONV1D_MODE4_SELECTIVE_GRID') == 'true':
         return "PyTorch F.conv1d (Selective Grid: FP32 for overflow, INT8 grid for normal)"
     elif env.get('CONV1D_MODE24_FP32') == 'true':
         return "PyTorch F.conv1d (FP32)"
-    elif env.get('CONV1D_MODE23_FP32') == 'true':
-        return "PyTorch F.conv1d (FP32)"
-    elif env.get('CONV1D_MODE3_FP32') == 'true':
-        return "PyTorch F.conv1d (FP32)"
-    elif env.get('FLOAT_SIM_ASIC_INT8') == 'true':
-        return "PyTorch F.conv1d + SiLU (FP32 with INT8 grid)"
     else:
         return "quant_causal_conv1d_cuda.fwd (CUDA INT8 kernel)"
 
@@ -291,22 +259,24 @@ def _get_ssm_kernel_name(mode: str) -> str:
         return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from DualScale INT8)"
     elif mode == '5-4':
         return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from QuarterScale with 4x precision for small values)"
-    elif mode == '6-3':
-        return "mamba_ssm selective_scan_fn (FP32 input from HalfScale mixed values)"
+    elif mode == '5-6':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from QuarterLog2: 4x precision for small + log2 for large)"
+    elif mode == '5-7':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from ThreeSegment: high/mid/low precision uniform)"
     elif mode == '6':
         return "quant_sscan_cuda.fwd_mode6 (CUDA FP32 input, dual-path)"
+    elif mode == '6-0':
+        return "selective_scan_cuda.fwd (CUDA INT8 kernel)"
+    elif mode == '6-1':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input)"
+    elif mode == '6-2':
+        return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from VirtualQuant+Outlier)"
+    elif mode == '6-3':
+        return "mamba_ssm selective_scan_fn (FP32 input from HalfScale mixed values)"
     elif mode == '6-4':
         return "quant_sscan_cuda.fwd_mode5 (CUDA FP32 input from CalibratedDualScale INT8 with α=1.0 outlier scale)"
     elif env.get('CONV1D_MODE4_SELECTIVE_GRID') == 'true' or env.get('CONV1D_MODE24_FP32') == 'true':
         return "PyTorch (FP32 simulation, no CUDA kernel)"
-    elif env.get('SSM_USE_CUDA_FOR_FP32') == 'true':
-        return "selective_scan_cuda.fwd (CUDA INT8 with requantization)"
-    elif env.get('SSM_USE_PYTORCH_INT8') == 'true':
-        return "PyTorch implementation (INT8 direct, no CUDA)"
-    elif env.get('CONV1D_MODE23_FP32') == 'true':
-        return "PyTorch implementation (INT8 with requantization, no CUDA)"
-    elif env.get('FLOAT_SIM_ASIC_INT8') == 'true':
-        return "PyTorch (FP32 simulation with INT8 grid, no CUDA)"
     else:
         return "selective_scan_cuda.fwd (CUDA INT8 kernel)"
 

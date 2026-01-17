@@ -99,11 +99,7 @@ class QCausalConv1D(nn.Module):
     def forward(self, x):
         global _CONV1D_LAYER_COUNTER
 
-        # Check simulation mode
-        float_sim_asic_int8 = os.environ.get('FLOAT_SIM_ASIC_INT8', 'false').lower() == 'true'
-        conv1d_mode23_fp32 = os.environ.get('CONV1D_MODE23_FP32', 'false').lower() == 'true'
-        conv1d_mode24_fp32 = os.environ.get('CONV1D_MODE24_FP32', 'false').lower() == 'true'
-        conv1d_mode3_fp32 = os.environ.get('CONV1D_MODE3_FP32', 'false').lower() == 'true'
+        # Check mode selection
         conv1d_mode4_selective = os.environ.get('CONV1D_MODE4_SELECTIVE_GRID', 'false').lower() == 'true'
 
         # Check if intermediate value saving is enabled
@@ -167,371 +163,42 @@ class QCausalConv1D(nn.Module):
             _CONV1D_LAYER_COUNTER += 1
             return y_output
 
-        # Baseline: CUDA INT8 kernel (returns INT8)
-        if not float_sim_asic_int8:
-            # Use INT8 CUDA kernel (same as Baseline)
-            y = quant_causal_conv1d_cuda.fwd(
-                    x, self.input_scale,
-                    self.weight, self.weight_scale,
-                    self.output_scale,
-                    self.bias_scale, self.bias,
-                    None, None, None, True
-                )
+        # Baseline: CUDA INT8 kernel (Mode 0)
+        y = quant_causal_conv1d_cuda.fwd(
+                x, self.input_scale,
+                self.weight, self.weight_scale,
+                self.output_scale,
+                self.bias_scale, self.bias,
+                None, None, None, True
+            )
 
-            # ===== SAVE INTERMEDIATE VALUES FOR COMPARISON =====
-            if should_save and save_mode == 'cuda':
-                os.makedirs(save_dir, exist_ok=True)
+        # ===== SAVE INTERMEDIATE VALUES FOR COMPARISON =====
+        if should_save and save_mode == 'cuda':
+            os.makedirs(save_dir, exist_ok=True)
 
-                # Save input (INT8)
-                torch.save(x.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_input.pt'))
+            # Save input (INT8)
+            torch.save(x.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_input.pt'))
 
-                # Save output (INT8)
-                torch.save(y.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_int8.pt'))
+            # Save output (INT8)
+            torch.save(y.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_int8.pt'))
 
-                # Save dequantized output (FP32) for comparison
-                y_dequant_fp32 = y.float() * self.output_scale
-                torch.save(y_dequant_fp32.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_fp32.pt'))
+            # Save dequantized output (FP32) for comparison
+            y_dequant_fp32 = y.float() * self.output_scale
+            torch.save(y_dequant_fp32.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_fp32.pt'))
 
-                # Save scale for verification
-                scale_info = {
-                    'input_scale': self.input_scale.item() if hasattr(self.input_scale, 'item') else self.input_scale,
-                    'weight_scale': self.weight_scale.item() if hasattr(self.weight_scale, 'item') else self.weight_scale,
-                    'output_scale': self.output_scale.item() if hasattr(self.output_scale, 'item') else self.output_scale,
-                    'bias_scale': self.bias_scale.item() if hasattr(self.bias_scale, 'item') else self.bias_scale,
-                }
-                torch.save(scale_info, os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_scales.pt'))
+            # Save scale for verification
+            scale_info = {
+                'input_scale': self.input_scale.item() if hasattr(self.input_scale, 'item') else self.input_scale,
+                'weight_scale': self.weight_scale.item() if hasattr(self.weight_scale, 'item') else self.weight_scale,
+                'output_scale': self.output_scale.item() if hasattr(self.output_scale, 'item') else self.output_scale,
+                'bias_scale': self.bias_scale.item() if hasattr(self.bias_scale, 'item') else self.bias_scale,
+            }
+            torch.save(scale_info, os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_scales.pt'))
 
-            # ===== END SAVE CODE =====
+        # ===== END SAVE CODE =====
 
-            _CONV1D_LAYER_COUNTER += 1
-            return y  # INT8
-
-        # Float-Sim INT8: CUDA INT8 kernel (returns INT8)
-        # Mode 2-0, 2-1, 2-2, 2-3: Use CUDA INT8 kernel, return INT8
-        # Dequantization will be handled in qMambaLayer based on specific mode
-        else:  # float_sim_asic_int8 == True
-            # Use CUDA INT8 kernel (100% identical to Mode 0 baseline)
-            y = quant_causal_conv1d_cuda.fwd(
-                    x, self.input_scale,
-                    self.weight, self.weight_scale,
-                    self.output_scale,
-                    self.bias_scale, self.bias,
-                    None, None, None, True  # silu_activation=True
-                )
-
-            # Return INT8 directly (same as Mode 0)
-            # Dequantization to FP32 will happen in qMambaLayer if needed
-
-            # ===== SAVE INTERMEDIATE VALUES FOR COMPARISON =====
-            if should_save and save_mode == 'floatsim':
-                os.makedirs(save_dir, exist_ok=True)
-
-                # Save input (INT8)
-                torch.save(x.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_input.pt'))
-
-                # Save output (INT8)
-                torch.save(y.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_int8.pt'))
-
-                # Save dequantized output for comparison
-                y_dequant_fp32 = y.float() * self.output_scale
-                torch.save(y_dequant_fp32.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_fp32.pt'))
-
-                # Save scale for verification
-                scale_info = {
-                    'input_scale': self.input_scale.item() if hasattr(self.input_scale, 'item') else self.input_scale,
-                    'weight_scale': self.weight_scale.item() if hasattr(self.weight_scale, 'item') else self.weight_scale,
-                    'output_scale': self.output_scale.item() if hasattr(self.output_scale, 'item') else self.output_scale,
-                    'bias_scale': self.bias_scale.item() if hasattr(self.bias_scale, 'item') else self.bias_scale,
-                }
-                torch.save(scale_info, os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_scales.pt'))
-
-                print(f"[Float-Sim INT8 Mode] Saved Layer {_CONV1D_LAYER_COUNTER} Conv1D intermediate values to {save_dir}")
-                print(f"  - input (INT8)")
-                print(f"  - output_int8 (INT8)")
-                print(f"  - output_fp32 (FP32, for comparison)")
-                print(f"  - scales (output_scale={self.output_scale:.10f})")
-            # ===== END SAVE CODE =====
-
-            # Print Layer 24 (counter=23) output and input_scale
-            if _CONV1D_LAYER_COUNTER == 23:
-                print(f"\n{'='*80}")
-                print(f"[Layer 24 / Counter {_CONV1D_LAYER_COUNTER}] Conv1D Output (Mode 2-0/2-1/2-2/2-3)")
-                print(f"{'='*80}")
-                print(f"  Location: qConvLayer.py forward() - FLOAT_SIM_ASIC_INT8 path")
-                print(f"  Conv1D Kernel: CUDA INT8 (same as Mode 0)")
-                print(f"  ")
-                print(f"  Output:")
-                print(f"    dtype: {y.dtype}")
-                print(f"    shape: {y.shape}")
-                print(f"    range: [{y.min().item()}, {y.max().item()}]")
-                print(f"    absmax: {y.abs().max().item()}")
-                print(f"    first 5 values [0,0,:5]: {y[0, 0, :5].tolist()}")
-                print(f"  ")
-                print(f"  Scales:")
-                print(f"    input_scale  = {self.input_scale:.10f}  (used by Conv1D CUDA kernel for input)")
-                print(f"    output_scale = {self.output_scale:.10f}  (for dequantization in qMambaLayer)")
-                print(f"  ")
-                print(f"  Next Step:")
-                print(f"    → qMambaLayer.py: decides whether to dequantize based on mode")
-                print(f"    → Mode 2-0/2-2: dequantize to FP32 for SSM")
-                print(f"    → Mode 2-1: keep INT8 for PyTorch INT8 SSM")
-                print(f"    → Mode 2-3: keep INT8, but Conv1D output is already FP32 in Mode 2-3")
-                print(f"{'='*80}\n")
-
-                # Quick verification mode: exit after printing Layer 24
-                if os.environ.get('QUICK_VERIFY', 'false').lower() == 'true':
-                    print("🔍 QUICK_VERIFY mode: Exiting after Layer 24 Conv1D output print")
-                    import sys
-                    sys.exit(0)
-
-            _CONV1D_LAYER_COUNTER += 1
-            return y  # INT8 (same as Mode 0)
-
-        # Mode 2-3: True FP32 Conv1D (CUDA kernel with FP32 output)
-        # This mode preserves CUDA's internal FP32 precision (skips quantization step)
-        if conv1d_mode23_fp32:
-            # Use CUDA INT8 kernel but output FP32 (preserve internal precision)
-            y_fp32 = quant_causal_conv1d_cuda.fwd_fp32(
-                    x, self.input_scale,
-                    self.weight, self.weight_scale,
-                    self.bias_scale, self.bias,
-                    True  # silu_activation=True
-                )
-
-            # ===== SAVE INTERMEDIATE VALUES (if needed) =====
-            if should_save and save_mode == 'floatsim':
-                os.makedirs(save_dir, exist_ok=True)
-
-                torch.save(x.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_input.pt'))
-                torch.save(y_fp32.detach().cpu(), os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_conv1d_output_fp32_true.pt'))
-
-                scale_info = {
-                    'input_scale': self.input_scale.item() if hasattr(self.input_scale, 'item') else self.input_scale,
-                    'weight_scale': self.weight_scale.item() if hasattr(self.weight_scale, 'item') else self.weight_scale,
-                    'bias_scale': self.bias_scale.item() if hasattr(self.bias_scale, 'item') else self.bias_scale,
-                }
-                torch.save(scale_info, os.path.join(save_dir, f'layer{_CONV1D_LAYER_COUNTER}_scales.pt'))
-
-                print(f"[Mode 2-3 FP32] Saved Layer {_CONV1D_LAYER_COUNTER} Conv1D (TRUE FP32 from CUDA)")
-            # ===== END SAVE CODE =====
-
-            # ===== MODE 2-3 SCALE VALIDATION =====
-            # Check if u_scale (output_scale) matches the actual FP32 output range
-            # This is critical because SSM will use u_scale to requantize FP32 → INT8
-
-            # Calculate simple MinMax scale based on actual FP32 output
-            y_fp32_absmax = y_fp32.abs().max().item()
-            simpleMinMaxScale = y_fp32_absmax / 127.0
-
-            # Get all scales
-            input_scale_val = self.input_scale.item() if hasattr(self.input_scale, 'item') else self.input_scale
-            output_scale_val = self.output_scale.item() if hasattr(self.output_scale, 'item') else self.output_scale
-
-            # SSM will use output_scale as u_scale (this is what gets used for requantization)
-            used_scale = output_scale_val
-            scale_name = "output_scale (used as u_scale)"
-
-            # Calculate scale ratio
-            scale_ratio = simpleMinMaxScale / used_scale if used_scale > 0 else float('inf')
-
-            # Simulate requantization to check value distribution
-            u_requant_simulated = torch.round(y_fp32 / used_scale).clamp(-128, 127)
-            unique_values = torch.unique(u_requant_simulated).numel()
-
-            # Print scale info for first layer only (to avoid spam)
-            if _CONV1D_LAYER_COUNTER == 0:
-                print(f"\n{'='*80}")
-                print(f"[Mode 2-3 Scale Validation] Layer {_CONV1D_LAYER_COUNTER}")
-                print(f"{'='*80}")
-                print(f"  FP32 Output Range: [{y_fp32.min().item():.6f}, {y_fp32.max().item():.6f}]")
-                print(f"  FP32 Output AbsMax: {y_fp32_absmax:.6f}")
-                print(f"")
-                print(f"  Available Scales:")
-                print(f"    input_scale          = {input_scale_val:.6f}  (from Conv1D input)")
-                print(f"    output_scale         = {output_scale_val:.6f}  (from Conv1D output, calibrated)")
-                print(f"    simpleMinMaxScale    = {simpleMinMaxScale:.6f}  (calculated from FP32 output)")
-                print(f"")
-                print(f"  ✅ SSM will use: {scale_name} = {used_scale:.6f}")
-                print(f"  Scale Ratio (simpleMinMax / used): {scale_ratio:.4f}x")
-                print(f"")
-                print(f"  Requantization Check (using {scale_name}):")
-                print(f"    Requantized INT8 range: [{u_requant_simulated.min().item():.0f}, {u_requant_simulated.max().item():.0f}]")
-                print(f"    Unique INT8 values used: {unique_values}/256")
-                print(f"{'='*80}\n")
-
-            # Error if scale mismatch is severe
-            if scale_ratio > 2.0 or scale_ratio < 0.5:
-                print(f"\n{'='*80}")
-                print(f"❌ ERROR: Severe scale mismatch detected in Mode 2-3!")
-                print(f"{'='*80}")
-                print(f"  Layer: {_CONV1D_LAYER_COUNTER}")
-                print(f"  simpleMinMaxScale: {simpleMinMaxScale:.6f}")
-                print(f"  Used Scale:        {used_scale:.6f}")
-                print(f"  Scale Ratio:       {scale_ratio:.4f}x")
-                print(f"")
-                print(f"  This means the FP32 output range doesn't match the calibrated scale!")
-                print(f"  SSM will requantize with wrong scale, causing poor performance.")
-                print(f"")
-                print(f"  Possible causes:")
-                print(f"    1. Mode 2-3 FP32 kernel produces different values than Mode 2-2 INT8 kernel")
-                print(f"    2. output_scale was calibrated for Mode 2-2, not Mode 2-3")
-                print(f"    3. Different numerical precision/rounding in the kernels")
-                print(f"")
-                print(f"  Solutions:")
-                print(f"    1. Use Mode 2-4 (FP32 Conv + FP32 SSM) instead - no requantization needed")
-                print(f"    2. Recalibrate scales specifically for Mode 2-3")
-                print(f"    3. Use dynamic scaling (calculate simpleMinMaxScale at runtime)")
-                print(f"{'='*80}\n")
-                raise RuntimeError(f"Mode 2-3 scale mismatch: ratio={scale_ratio:.4f}x (expected ~1.0x)")
-
-            # Warning if scale mismatch is moderate
-            if scale_ratio > 1.5 or scale_ratio < 0.67:
-                print(f"\n⚠️  Warning: Moderate scale mismatch in Mode 2-3 Layer {_CONV1D_LAYER_COUNTER}")
-                print(f"    simpleMinMaxScale: {simpleMinMaxScale:.6f}, Used Scale: {used_scale:.6f}, Ratio: {scale_ratio:.4f}x")
-                print(f"    This may cause suboptimal performance.\n")
-
-            # ===== END SCALE VALIDATION =====
-
-            # Print Layer 24 (counter=23) output
-            if _CONV1D_LAYER_COUNTER == 23:
-                print(f"\n{'='*80}")
-                print(f"[Layer 24 / Counter {_CONV1D_LAYER_COUNTER}] Conv1D Output (Mode 2-3)")
-                print(f"{'='*80}")
-                print(f"  Location: qConvLayer.py forward() - Mode 2-3 path")
-                print(f"  Conv1D Kernel: CUDA FP32 kernel (fwd_fp32) → TRUE FP32 output")
-                print(f"  ")
-                print(f"  Output:")
-                print(f"    dtype: {y_fp32.dtype}")
-                print(f"    shape: {y_fp32.shape}")
-                print(f"    range: [{y_fp32.min().item():.6f}, {y_fp32.max().item():.6f}]")
-                print(f"    absmax: {y_fp32.abs().max().item():.6f}")
-                print(f"  ")
-                print(f"  Scales:")
-                print(f"    input_scale  = {self.input_scale:.10f}  (used by Conv1D CUDA FP32 kernel for input)")
-                print(f"    output_scale = {self.output_scale:.10f}  (will be used by SSM for requantization to INT8)")
-                print(f"  ")
-                print(f"  Next Step:")
-                print(f"    → qMambaLayer.py: x requantize to INT8 (using output_scale)")
-                print(f"    → x_proj (W8A8B8O8Linear): compute dt/B/C (INT8)")
-                print(f"    → qSelectiveScan.py: Requantize FP32 u → INT8, then PyTorch INT8 SSM")
-                print(f"{'='*80}\n")
-
-            _CONV1D_LAYER_COUNTER += 1
-            return y_fp32  # TRUE FP32 (preserves CUDA internal precision)
-
-        # Mode 2-4: True FP32 Conv1D + FP32 SSM (no requantization)
-        # This mode preserves complete FP32 precision throughout (Conv1D → SSM)
-        if conv1d_mode24_fp32:
-            # Use CUDA INT8 kernel but output FP32 (preserve internal precision)
-            y_fp32 = quant_causal_conv1d_cuda.fwd_fp32(
-                    x, self.input_scale,
-                    self.weight, self.weight_scale,
-                    self.bias_scale, self.bias,
-                    True  # silu_activation=True
-                )
-
-            # ===== MODE 2-4 INFO =====
-            # No scale validation needed - SSM will use FP32 directly (no requantization)
-            if _CONV1D_LAYER_COUNTER == 0:
-                print(f"\n{'='*80}")
-                print(f"[Mode 2-4 Info] Layer {_CONV1D_LAYER_COUNTER}")
-                print(f"{'='*80}")
-                print(f"  Conv1D: CUDA FP32 kernel → TRUE FP32 output")
-                print(f"  SSM:    Mode 2-2 same FP32 (mode22_fp32_replicates_mode21)")
-                print(f"")
-                print(f"  FP32 Output Range: [{y_fp32.min().item():.6f}, {y_fp32.max().item():.6f}]")
-                print(f"  FP32 Output AbsMax: {y_fp32.abs().max().item():.6f}")
-                print(f"")
-                print(f"  ✅ Conv1D: TRUE FP32 (vs Mode 2-2 INT8 grid)")
-                print(f"{'='*80}\n")
-
-            # Print Layer 24 (counter=23) output
-            if _CONV1D_LAYER_COUNTER == 23:
-                print(f"\n{'='*80}")
-                print(f"[Layer 24 / Counter {_CONV1D_LAYER_COUNTER}] Conv1D Output (Mode 2-4)")
-                print(f"{'='*80}")
-                print(f"  Location: qConvLayer.py forward() - Mode 2-4 path")
-                print(f"  Conv1D Kernel: CUDA FP32 kernel (fwd_fp32) → TRUE FP32 output (same as Mode 2-3)")
-                print(f"  ")
-                print(f"  Output:")
-                print(f"    dtype: {y_fp32.dtype}")
-                print(f"    shape: {y_fp32.shape}")
-                print(f"    range: [{y_fp32.min().item():.6f}, {y_fp32.max().item():.6f}]")
-                print(f"    absmax: {y_fp32.abs().max().item():.6f}")
-                print(f"  ")
-                print(f"  Scales:")
-                print(f"    input_scale  = {self.input_scale:.10f}  (used by Conv1D CUDA FP32 kernel for input)")
-                print(f"    output_scale = {self.output_scale:.10f}  (used by qMambaLayer.py for x requantization)")
-                print(f"  ")
-                print(f"  Next Step:")
-                print(f"    → qMambaLayer.py: x requantize to INT8 (using output_scale)")
-                print(f"    → x_proj (W8A8B8O8Linear): compute dt/B/C (INT8)")
-                print(f"    → qSelectiveScan.py: Mode 2-2 same FP32 SSM (FP32 u, INT8 dt/B/C)")
-                print(f"{'='*80}\n")
-            # ===== END MODE 2-4 INFO =====
-
-            _CONV1D_LAYER_COUNTER += 1
-            return y_fp32  # TRUE FP32 (will be used directly by FP32 SSM)
-
-        # Mode 3: FP32/FP16 input → FP32 Conv1D + FP32 SSM + INT8 Linear (hybrid precision)
-        # This mode accepts FP32/FP16 input and uses FP32 for Conv1D and SSM, but keeps Linear layers as INT8
-        if conv1d_mode3_fp32:
-            # ===== Handle FP32/FP16 input =====
-            # If input is FP32/FP16, quantize it to INT8 for CUDA kernel
-            if x.dtype in [torch.float32, torch.float16]:
-                if _CONV1D_LAYER_COUNTER == 0:
-                    print(f"\n{'='*80}")
-                    print(f"[Mode 3 Conv1D] Layer {_CONV1D_LAYER_COUNTER}")
-                    print(f"{'='*80}")
-                    print(f"  Input dtype: {x.dtype} (FP32/FP16)")
-                    print(f"  Input range: [{x.min().item():.6f}, {x.max().item():.6f}]")
-
-                # Calculate dynamic scale from FP32 input
-                x_absmax = x.abs().max().item()
-                x_dynamic_scale = x_absmax / 127.0 if x_absmax > 0 else 1.0
-
-                # Quantize FP32 → INT8
-                x_int8 = torch.round(x / x_dynamic_scale).clamp(-128, 127).to(torch.int8)
-
-                if _CONV1D_LAYER_COUNTER == 0:
-                    print(f"  Dynamic scale: {x_dynamic_scale:.6f}")
-                    print(f"  Quantized to INT8 for CUDA kernel")
-                    print(f"{'='*80}\n")
-
-                # Use CUDA FP32 kernel with quantized input
-                y_fp32 = quant_causal_conv1d_cuda.fwd_fp32(
-                        x_int8, x_dynamic_scale,  # Use dynamic scale
-                        self.weight, self.weight_scale,
-                        self.bias_scale, self.bias,
-                        True  # silu_activation=True
-                    )
-            else:
-                # Input is already INT8 (use original input_scale)
-                y_fp32 = quant_causal_conv1d_cuda.fwd_fp32(
-                        x, self.input_scale,
-                        self.weight, self.weight_scale,
-                        self.bias_scale, self.bias,
-                        True  # silu_activation=True
-                    )
-
-            # ===== MODE 3 INFO =====
-            if _CONV1D_LAYER_COUNTER == 0:
-                print(f"\n{'='*80}")
-                print(f"[Mode 3 Output] Layer {_CONV1D_LAYER_COUNTER}")
-                print(f"{'='*80}")
-                print(f"  Conv1D: CUDA FP32 kernel → TRUE FP32 output")
-                print(f"  SSM:    Will use FP32 directly (no requantization)")
-                print(f"  Linear: Keeps INT8 quantization (baseline)")
-                print(f"")
-                print(f"  FP32 Output Range: [{y_fp32.min().item():.6f}, {y_fp32.max().item():.6f}]")
-                print(f"  FP32 Output AbsMax: {y_fp32.abs().max().item():.6f}")
-                print(f"")
-                print(f"  ✅ Hybrid precision: FP32 for Conv/SSM, INT8 for Linear")
-                print(f"{'='*80}\n")
-            # ===== END MODE 3 INFO =====
-
-            _CONV1D_LAYER_COUNTER += 1
-            return y_fp32  # TRUE FP32 (will be used directly by FP32 SSM)
+        _CONV1D_LAYER_COUNTER += 1
+        return y  # INT8
 
     def update(self, x, conv_state):
         # update conv_state in-place
